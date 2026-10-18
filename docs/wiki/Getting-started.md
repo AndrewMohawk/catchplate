@@ -2,11 +2,20 @@
 
 [Home](Home.md) · [Provider choices](Credentials-and-providers.md) · [Client recipes](Clients-and-recipes.md)
 
+**Already received a client JSON and CA?** Skip the administrator steps on this
+page and use the [developer quickstart](../developer-quickstart.md). You do not
+need to create another credential, client or permission.
+
 Use a small, read-only job first: for example, a script that reads issues from one GitHub repository. You need console access, a provider credential with the required provider-side rights, and a client environment that can reach the advertised proxy.
 
 Do not enter secrets in chat, issue comments or checked-in example files. The provider secret goes into the authenticated **Credentials** form. The workload receives only its own Catchplate proxy token.
 
 Need to create the provider integration first? Use the [GitHub App walkthrough](GitHub-App-setup.md) or [Google/X OAuth setup](OAuth-provider-setup.md). For your own JSON API, use the [custom Bearer/header example](Custom-API-credentials.md).
+
+The retained main console still uses Serverware while this source uses
+Catchplate. Follow the [rename status](../catchplate-rename.md) and hand over the
+client release matching the actual instance; do not substitute a new hostname
+or placeholder just because it appears in these source examples.
 
 ## 1. Save the provider credential
 
@@ -40,10 +49,24 @@ For supported JSON jobs, you do not need request/response field lists unless you
 2. Copy the advertised proxy endpoint; the console address is not the forward proxy.
 3. Choose **Download CA certificate**. Trust this public CA only in the intended client, with TLS verification still enabled.
 4. Select the matching recipe or connection template. For the supplied SDK examples, prepare dependencies using that project's README before supplying the client token.
-5. For the supplied GitHub, Gmail, npm, Alchemy and X examples, choose **Download private client config** while the page still holds the token. Save it beside the CA and run the prepared example with `--config /path/catchplate-client.private.json`. The example imports its proxy login and saved scope, so those values need not be retyped.
-6. Alternatively, supply the client token privately as `CATCHPLATE_PROXY_TOKEN` and follow the environment-based recipe. Never substitute the real provider secret. Posting and publishing always require their separate explicit local inputs and confirmation.
+5. Choose **Download private client config** while the page still holds the matching token. Use the complete download for the selected permission, not only its nested recipe. The supplied GitHub, Gmail, npm, Alchemy, X and common-app clients accept it with `--config /path/catchplate-client.private.json`; the file supplies the proxy login and scope without retyping them.
+6. Keep the CA at the path specified by `ca_file`; relative paths start beside the JSON. The public CA is not the provider key. If the proxy needs a separate private outer CA, supply it separately and choose a compatible client.
 
 **Download private client config** is available only while the page holds the matching one-time token. The download contains that token: keep it private and out of Git. A copied recipe or downloaded config does not execute a request.
+
+### Hand off to the developer
+
+Deliver the private JSON securely, the verified public CA file(s), the exact
+job/scope, the selected example directory/language and matching release. Include
+the login expiry and a contact for renewal. The developer needs no provider key
+or console administrator access. Share the
+[developer quickstart](../developer-quickstart.md#before-you-start), not a list of
+environment variables to reconstruct.
+
+If you reused a client and no longer hold its token, you cannot download a fresh
+private config from public settings alone. Locate its existing secure copy or
+coordinate a deliberate token replacement with every workload using that
+client; do not rotate it merely to make the download button work.
 
 ## 5. Check the job and its audit outcome
 

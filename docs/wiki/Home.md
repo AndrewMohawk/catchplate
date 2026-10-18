@@ -9,7 +9,12 @@ in this repository and a local checkout; a separate GitHub Wiki is optional. See
 [Wiki publication status](https://github.com/AndrewMohawk/catchplate/blob/main/docs/wiki-publishing.md)
 only if you maintain the documentation.
 
-[Open the retained console](https://serverware.example.com/) using the homelab sign-in. This is the persistent product instance, not a separate demo. The Catchplate source rename is complete; the renamed build, migration and hostname cutover are pending. See [rename status](../catchplate-rename.md). Ordinary setup does not require starting a pilot, building the proxy or enrolling a security key. [Instance walkthrough](https://github.com/AndrewMohawk/catchplate/blob/main/docs/operator-demo.md).
+[Open the retained console](https://serverware.example.com/) using the homelab sign-in. This is the persistent product instance, not a separate demo. Renamed source and isolated/sandbox checks are available; the main installation still uses Serverware and its retained-state/hostname cutover remains pending. See [rename status](../catchplate-rename.md). Ordinary setup does not require starting a pilot, building the proxy or enrolling a security key. [Instance walkthrough](https://github.com/AndrewMohawk/catchplate/blob/main/docs/operator-demo.md).
+
+**Choose where you are:** [I need to grant access](Getting-started.md) ·
+[I already have the private JSON and CA](../developer-quickstart.md) ·
+[My request failed](Troubleshooting.md). A developer with a working handoff can
+skip credential creation and administrator setup entirely.
 
 ## The three things you manage
 
@@ -35,6 +40,7 @@ only if you maintain the documentation.
 
 ### Use Catchplate from your code or agent
 
+- [Run your first permitted read](../developer-quickstart.md): check the handoff, prepare one example once, then run it with the private config.
 - [Run an existing library or CI job](Clients-and-recipes.md): use the administrator-provided private client configuration with Node.js, Python, Go, curl, npm or GitHub Actions. You do not need the provider key.
 - [Connect an MCP-capable agent](Clients-and-recipes.md#connect-an-mcp-capable-agent): select downloaded permissions for the local stdio server without exporting provider keys.
 - [Fix a failed or uncertain operation](Troubleshooting.md): expired tokens, unavailable providers, TLS problems and saved-state recovery.

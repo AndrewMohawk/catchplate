@@ -300,6 +300,8 @@ function createStaticKeyReplacementView(workspace) {
     const catalog = workspace.state.catalog;
     const names = operatorConnectResourceChoices(catalog.credentials.filter(item => item.status === 'active'));
     element('credential-replace-title').textContent = 'Replace key · ' + names.find(item => item.id === id).name;
+    renderCredentialGuide('credential-replace-guide', credentialGuideFor(catalog.credentials.find(item => item.id === id)),
+      {secret: 'credential-replace-secret'});
     const rules = catalog.access_rules.filter(item => item.status === 'active' && item.credential_id === id);
     const ids = new Set(rules.map(item => item.application_id));
     const apps = operatorConnectResourceChoices(catalog.applications.filter(item => ids.has(item.id)));

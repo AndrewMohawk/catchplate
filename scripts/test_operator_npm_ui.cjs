@@ -13,7 +13,7 @@ const {credential, application, rule, IDS, NOW} = require('./test_operator_catal
 const {publicCatalog, digest} = require('./test_operator_ordinary_modes_browser.cjs');
 const {clientCredentialInput, credentialHeaderTarget} = require('../catchplate/operator_demo_web/app.js');
 const ASSETS = resolve(__dirname, '../catchplate/operator_demo_web');
-const FILES = ['workspace_core.js', 'workspace_github.js', 'workspace_npm.js', 'workspace_npm_publish.js',
+const FILES = ['workspace_core.js', 'credential_guide_data.js', 'workspace_credential_guides.js', 'workspace_github.js', 'workspace_npm.js', 'workspace_npm_publish.js',
   'workspace_x.js', 'workspace_alchemy.js', 'workspace_aws.js', 'workspace_ecr.js', 'workspace_resources.js', 'workspace_connect.js'];
 const SOURCE = FILES.map(name => readFileSync(resolve(ASSETS, name), 'utf8')).join('\n');
 const HTML = readFileSync(resolve(ASSETS, 'index.html'), 'utf8');
@@ -57,7 +57,12 @@ class Node {
   // Connect reads HTMLSelectElement.options when updating provider choices.
   // Resolve the current option descendants; other inert elements do not gain it.
   get options() { return this.tag === 'select' ? this.descendants().filter(node => node.tag === 'option') : undefined; }
-  after() {}
+  after(...nodes) {
+    if (!this.parent) return;
+    for (const node of nodes) node.parent = this.parent;
+    this.parent.children.splice(this.parent.children.indexOf(this) + 1, 0, ...nodes);
+  }
+  getAttribute(name) { return this.attrs[name] ?? null; }
   setAttribute(name, value) { this.attrs[name] = String(value); }
   removeAttribute(name) { delete this.attrs[name]; }
   addEventListener(name, callback) { this.events[name] = callback; }
@@ -96,7 +101,7 @@ function inertDom() {
     if (node.id) nodes.set(node.id, node);
     if (!empty.has(tag)) stack.push(node);
   }
-  return {nodes, getElementById: id => { assert(nodes.has(id), 'known inert element ' + id); return nodes.get(id); },
+  return {nodes, getElementById: id => nodes.get(id) || root.descendants().find(node => node.id === id) || null,
     createElement: tag => new Node(tag), querySelectorAll: selector => selector === 'input[name="connect-method"]:checked' ?
       root.descendants().filter(node => node.tag === 'input' && node.attrs.name === 'connect-method' && node.checked) : []};
 }

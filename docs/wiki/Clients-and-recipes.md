@@ -10,6 +10,44 @@ A **client** is your script, agent, CLI tool or CI job. It is not the provider a
 
 A GitHub App ID is **not** `CATCHPLATE_APP_ID`. The latter is the Catchplate client's UUID. A client can use a saved GitHub App connection without receiving its private key, JWT or installation token.
 
+**Already have access?** Start with the [handoff checklist](../developer-quickstart.md#before-you-start),
+then choose a job below. You can skip **Set up one client** and environment-variable
+setup when using the complete private download. During the
+[rename](../catchplate-rename.md), use a release matching your actual instance;
+the main retained Serverware deployment is not changed by checking out Catchplate.
+
+## Choose the job before the library
+
+| Intended job | Maintained route |
+| --- | --- |
+| Read GitHub issues | [GitHub Node/Python/Go](#nodejs-python-and-go-read-github-issues). Node also offers explicit issue/comment creation; Python and Go examples remain read-only. The MCP adapter additionally lists comments. PAT and App use the same client path. |
+| Read a bounded Gmail inbox sample | [Gmail SDKs](#other-maintained-sdk-jobs), not arbitrary Google APIs, message sending or attachments. |
+| Read chain status or look up an X username | [Alchemy/X SDKs](#other-maintained-sdk-jobs), scoped to the saved chain/username; X posting is a different permission. |
+| Read npm metadata, install/ci or publish | [Stock npm launcher](#cli-curl-and-npm); these are three separate permission types, not one blanket registry grant. |
+| Use Slack, Notion, Stripe, Cloudflare or other common services/AI | [Common-app clients](#common-apps-and-ai-providers), only their listed operations; service/AI SDK support differs by provider. |
+| Give an agent or CI job the same scoped access | [MCP](#connect-an-mcp-capable-agent) or [GitHub Actions](#github-actions), with private config/CA inputs—not provider keys. |
+| Publish a reviewed OCI image to ECR | [ECR staging/review/publication](#aws-ecr-publication); not Docker push or arbitrary Boto3 calls. |
+
+## Prepared read commands
+
+Prepare **one** linked project using its README first. Each command below runs
+from that language's project directory, using the complete private config at
+your chosen path. They are alternatives, not a sequence to execute.
+
+| Project family | Node.js | Python | Go binary |
+| --- | --- | --- | --- |
+| `github-issues-*` | `node client.mjs --config /private/client.json` | `.venv/bin/python -I -B issues.py --config /private/client.json` | `./github-issues --config /private/client.json` |
+| `google-gmail-*` | `node client.mjs --config /private/client.json` | `.venv/bin/python -I -B gmail.py --config /private/client.json` | `./gmail-example --config /private/client.json` |
+| `alchemy-chain-status-*` | `node client.mjs --config /private/client.json` | `.venv/bin/python -I -B chain_status.py --config /private/client.json` | `./chain-status-example --config /private/client.json` |
+| `x-username-*` | `node client.mjs --config /private/client.json` | `.venv/bin/python -I -B username.py --config /private/client.json` | `./x-username-example --config /private/client.json` |
+
+The `*` above means `node`, `python` or `go`; it is not a shell command. Build Go
+once using the [documented binary names](../developer-quickstart.md#1-prepare-one-example-once).
+Node dependencies and Python virtual environments are also reused. No per-run
+install, `go run`, Catchplate build or pilot is needed. The common-app HTTP/service
+and AI examples have separate environments and commands in their
+[README](../../examples/common-apps/README.md).
+
 ## Set up one client
 
 1. Save or connect the provider credential in **Credentials**. Saving it alone grants no access.
@@ -25,13 +63,20 @@ Presets and copied recipes are capability-gated. If the matching control is unav
 
 ## Inputs the client receives
 
-The GitHub, Gmail, npm, Alchemy and X examples accept the matching **Download
+The GitHub, Gmail, npm, Alchemy, X and common-app examples accept the matching **Download
 private client config** file with `--config PATH`. Prepare dependencies first,
 then keep the downloaded JSON and CA together. Relative CA paths resolve beside
 the JSON. This avoids retyping the connection values below; environment-only
 setup remains an alternative. The file contains the client token, not a provider
 credential, and never selects a write operation or supplies posting/publishing
 confirmation.
+
+### Environment-only alternative
+
+The following table and shell snippet are for an intentional environment-based
+setup. **Skip them when using `--config`.** Do not combine a private JSON with
+copied selectors from another permission. `.env.example` files describe values;
+they are not automatically loaded by these programs.
 
 | Input | Meaning |
 | --- | --- |
@@ -105,7 +150,7 @@ Run one of these commands from its example directory:
 
 ```bash
 node client.mjs --config /path/catchplate-client.private.json
-python issues.py --config /path/catchplate-client.private.json
+.venv/bin/python -I -B issues.py --config /path/catchplate-client.private.json
 ./github-issues --config /path/catchplate-client.private.json
 ```
 
@@ -136,10 +181,10 @@ Then run `.venv/bin/python -B issues.py --limit 100`. This recipe rejects `CATCH
 # Go: use the toolchain required by this example's README/go.mod.
 cd examples/github-issues-go
 GOTOOLCHAIN=local go mod download
-GOTOOLCHAIN=local go build -o github-issues-example .
+GOTOOLCHAIN=local go build -o github-issues .
 ```
 
-Then run `./github-issues-example`. It prints counts rather than issue contents. See the [Go recipe](https://github.com/AndrewMohawk/catchplate/tree/main/examples/github-issues-go).
+Then run `./github-issues`. It prints counts rather than issue contents. See the [Go recipe](https://github.com/AndrewMohawk/catchplate/tree/main/examples/github-issues-go).
 
 Each `cd` block above starts from the repository root; they are alternatives, not one sequential script. Node/Python results can include issue titles: treat private-repository output as private data.
 
@@ -191,7 +236,8 @@ unverified. See the
 
 For Alchemy and either X job, add `--config ./catchplate-client.private.json`
 to the prepared example's normal command: `node client.mjs`,
-`python3 -I chain_status.py` / `username.py` / `post.py`, or `go run .`.
+`.venv/bin/python -I -B chain_status.py` / `username.py` / `post.py`, or the
+already-built `./chain-status-example` / `./x-username-example` / `./x-post-example`.
 The X posting text and confirmation must still be supplied locally, never in
 the JSON. Follow each README for the supported runtime and exact preparation.
 

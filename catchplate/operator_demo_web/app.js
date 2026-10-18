@@ -55,6 +55,7 @@ function buildCurlCommand({proxyUrl, upstreamUrl, method, caPath, allowedHeaders
 
 if (typeof module !== 'undefined' && module.exports) module.exports = {buildCurlCommand, clientCredentialInput, credentialHeaderTarget};
 else {
+  initializeCredentialGuides();
   const browserStateMigration = migrateLegacyOperatorBrowserState();
   const workspace = createOperatorWorkspace(browserStateMigration);
   element('browser-recovery-status').hidden = !browserStateMigration.blocked && !browserStateMigration.migrated;

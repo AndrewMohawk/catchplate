@@ -32,6 +32,12 @@ The running instance is the product instance, not a separate demo. Opening it
 does not build the proxy, start a pilot or require a security-key ceremony.
 The versioned guides above work without a published GitHub Wiki.
 
+**Already given access?** You should receive a private client JSON, the public
+CA it references, and the exact permitted job/example. Use that example's
+`--config` command; you do not need to configure a provider account or retype its
+repository, channel or model. If any of those inputs is missing, use the
+[developer handoff checklist](docs/developer-quickstart.md#before-you-start).
+
 ## Three things, one setup flow
 
 | Thing | What it is | Example |
@@ -43,7 +49,8 @@ The versioned guides above work without a published GitHub Wiki.
 To save a key: **Credentials → choose provider → paste key → Save credential**.
 The provider settings and suggested name are filled in. Saving it does not
 create a client or grant access. OAuth accounts and GitHub Apps have their own
-provider-specific setup.
+provider-specific setup. If you do not have the provider credential yet, start
+with [provider setup](docs/wiki/Credentials-and-providers.md), not a client token.
 
 To use it: choose **Use with a client**, select or create the client, and choose
 a scoped permission. Download its private client configuration and the public
@@ -70,6 +77,11 @@ unrestricted access to every endpoint a provider offers.
 | A GitHub Actions job | [CI setup](docs/wiki/Clients-and-recipes.md#github-actions) |
 | An MCP-capable agent | [MCP setup and local configuration export](examples/mcp/README.md) |
 | A reviewed AWS ECR image publication | [ECR workflow](docs/operator-ecr-publication.md) |
+
+The [recipe chooser](docs/wiki/Clients-and-recipes.md#choose-the-job-before-the-library)
+lists the supported operations and ready-to-run Node/Python/Go entrypoints.
+For example, GitHub Python/Go only read issues; a Gmail grant does not send mail,
+and an npm metadata grant does not authorize install or publish.
 
 Dependency installation happens once in the example project, before supplying
 its private configuration. The configuration contains a Catchplate client

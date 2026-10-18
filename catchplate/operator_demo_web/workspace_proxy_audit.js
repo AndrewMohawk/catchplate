@@ -115,6 +115,7 @@ function createProxyView(workspace, applications) {
   let command = '';
   let handoffCommand = '';
   let handoffContext = '';
+  let templateContext = '';
   let ruleChoiceRequired = '';
   let gmailContext = '';
   const gmailLanguages = new Map();
@@ -125,6 +126,30 @@ function createProxyView(workspace, applications) {
       tokenExpiresAtEpochMs: application.token_expires_at_epoch_ms,
       caPath: element('ca-path').value, proxyCaPath: element('gmail-proxy-ca-path').value,
       language: element('gmail-sdk-language').value, agePolicy: gmailAgePolicy(rule.age_policy)};
+  }
+  function configAvailability(application, rule, configured = false) {
+    const catalog = workspace.state.catalog;
+    let message;
+    if (!catalog) message = 'Download unavailable: refresh workspace status to confirm the saved client and permission.';
+    else if (workspace.state.uncertain) message = 'Download unavailable: review the uncertain change and refresh saved state first. No operation will be repeated automatically.';
+    else if (workspace.state.busy) message = 'Download unavailable while a workspace operation is in progress.';
+    else if (!application) message = 'Choose a client and a saved permission to prepare its private config.';
+    else if (!rule) message = catalog.access_rules.some(item => item.status === 'active' && item.application_id === application.id) ?
+      'Choose one of this client’s saved permissions to prepare its private config.' :
+      'This client has no saved permission. Add a permission in Clients before preparing its config.';
+    else if (application.token_status !== 'valid' || !Number.isSafeInteger(application.token_expires_at_epoch_ms) || application.token_expires_at_epoch_ms <= Date.now())
+      message = 'Download unavailable: this client token is expired, revoked or cannot be verified. Use Clients to explicitly rotate it if needed; no token is renewed automatically.';
+    else if (!operatorRuleSupported(rule, catalog) || !catalog.credentials.some(item => item.id === rule.credential_id && item.status === 'active'))
+      message = 'Download unavailable: the saved permission, credential or required provider capability is unavailable. Review its current setup before use.';
+    else if (!workspace.loaded() || rule.enforcement !== 'active' || application.access_status !== 'active')
+      message = 'Download unavailable until this client’s exact saved permission is loaded by the proxy. Refresh workspace status; no access is granted here.';
+    else if (!applications.tokenFor(application.id))
+      message = 'This page no longer holds this client’s one-time token. Use your previously saved private config, or explicitly rotate the token in Clients to download a new one. Rotation replaces the existing token; it is never automatic.';
+    else if (!configured) message = 'Download unavailable: complete the selected client’s example settings below, including valid CA paths.';
+    else message = 'Ready to download this client’s private config with its held one-time token. Keep the file private; provider credentials are not included.';
+    const status = element('client-config-availability');
+    status.textContent = message;
+    status.dataset.state = configured && !element('download-config').disabled ? 'available' : 'unavailable';
   }
   renderOperatorCompatibility('client-compatibility-content');
   function render() {
@@ -145,6 +170,7 @@ function createProxyView(workspace, applications) {
     for (const id of ['client-proxy-auth-mode', 'client-proxy-host', 'client-proxy-port', 'client-proxy-username',
       'client-proxy-password-note', 'client-proxy-login-status']) element(id).textContent = '';
     const catalog = workspace.state.catalog;
+    configAvailability();
     if (!catalog) { element('client-command').textContent = 'Refresh workspace status before using this client.'; return; }
     const diagnosticClients = operatorDiagnosticResources(catalog).applications;
     const activeClients = catalog.applications.filter(item => item.status === 'active');
@@ -159,8 +185,17 @@ function createProxyView(workspace, applications) {
     chooseOptions('proxy-rule', ruleChoiceRequired === application?.id ?
       [{id: '', name: 'Choose a permission for this client'}, ...clientRules] : clientRules, 'Add a permission for this client');
     const rule = catalog.access_rules.find(item => item.id === element('proxy-rule').value);
+    configAvailability(application, rule);
+    const nextTemplateContext = application?.id + ':' + rule?.id;
+    if (nextTemplateContext !== templateContext) {
+      const prepared = operatorGmailSdkCompatible(rule, catalog) ||
+        applicationProxyAuthentication(application) === 'basic_and_bearer_v1' && operatorFileProfiles(rule).length > 0;
+      element('client-advanced-template').open = Boolean(rule && !prepared);
+      templateContext = nextTemplateContext;
+    }
     if (isEcrRule(rule) && application) {
       renderEcrClient(workspace, application, rule, applications);
+      configAvailability(application, rule, true);
       command = element('client-command').textContent; return;
     }
     const gmail = isGmailRule(rule);
@@ -255,6 +290,7 @@ function createProxyView(workspace, applications) {
     if ((npm || npmPublish || npmInstall || xPost) && proxyAuthentication !== 'basic_and_bearer_v1') {
       element('client-command').textContent = xPost ? 'The X SDK example needs standard username/password proxy login.' : 'The stock npm client needs standard username/password proxy login.';
       element('client-guidance').textContent = 'Use Clients to explicitly enable standard proxy login if advertised, then refresh. The app ID is the username and its existing Catchplate token is the password. No login mode or token is changed automatically.';
+      element('client-config-availability').textContent = 'Download unavailable: this example requires standard username/password proxy login. Use Clients to explicitly enable it if advertised; no login mode or token is changed here.';
       return;
     }
     const profiles = proxyAuthentication === 'basic_and_bearer_v1' ? operatorFileProfiles(rule) : [];
@@ -306,6 +342,7 @@ function createProxyView(workspace, applications) {
     element('copy-command').disabled = !ready;
     element('copy-provider-config-command').disabled = !ready || !handoffCommand;
     element('download-config').disabled = !ready || !applications.tokenFor(application.id);
+    configAvailability(application, rule, true);
     const basic = proxyAuthentication === 'basic_and_bearer_v1';
     element('client-proxy-login').hidden = false;
     element('client-proxy-auth-mode').textContent = basic ? 'Standard username/password login; Bearer also accepted.' : 'Bearer proxy authentication only.';
@@ -665,7 +702,9 @@ function createAuditView(workspace) {
     }
     // Never promote arbitrary error strings, URLs, headers, notes or unknown
     // identifiers into the summary. Keep the server-redacted details unchanged.
-    return {title, metadata: metadata.join(' · '), reason};
+    const reviewRequired = record.event_type === 'operator.host_approval.requested' ||
+      record.event_type === 'data_plane.request.denied' && (own('status_code') === 428 || own('action') === 'approval_required');
+    return {title, metadata: metadata.join(' · '), reason, reviewRequired};
   }
   function controls() {
     const blocked = authenticationRequired && !workspace.state.catalog;
@@ -713,6 +752,10 @@ function createAuditView(workspace) {
         const card = textNode('article', undefined, 'card event-card'); card.append(textNode('h3', summary.title), textNode('time', event.created_at || 'Time not reported'));
         if (summary.metadata) { const metadata = textNode('p', summary.metadata, 'small muted'); metadata.dataset.auditSummary = ''; card.append(metadata); }
         if (summary.reason) { const reason = textNode('p', summary.reason); reason.dataset.auditReason = ''; card.append(reason); }
+        if (summary.reviewRequired) {
+          const review = textNode('a', 'Open Pending actions', 'button secondary');
+          review.href = '#pending-actions'; review.dataset.auditPendingLink = ''; card.append(review);
+        }
         const outcome = auditProviderOutcome(event);
         if (outcome) {
           const note = textNode('p', outcome.text, outcome.warning ? 'warning' : 'small muted');

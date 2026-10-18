@@ -68,6 +68,9 @@ function createAwsCredentialsView(workspace) {
   const clearBody = body => { if (body) for (const field of ['access_key_id', 'secret_access_key', 'session_token']) body[field] = ''; };
   function configure(prefix) {
     const session = element(prefix + '-kind').value === 'session';
+    renderCredentialGuide(prefix + '-guide', session ? 'aws_session' : 'aws_long_term',
+      Object.fromEntries(['access_key_id', 'secret_access_key', 'session_token', 'expires_at']
+        .map(field => [field, prefix + '-' + field.replaceAll('_', '-')])));
     element(prefix + '-session-fields').hidden = !session;
     for (const field of ['session-token', 'expires-at']) {
       const control = element(prefix + '-' + field); control.disabled = !session; control.required = session;

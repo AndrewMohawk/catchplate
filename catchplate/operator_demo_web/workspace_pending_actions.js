@@ -115,6 +115,23 @@ function pendingApprovalLabels(item, catalog) {
       permission.record.credential_id !== credential.record.id)) permission.label = 'Permission binding unavailable or changed';
   return {client: client.label, credential: credential.label, permission: permission.label};
 }
+function pendingActionsSummary({state, rows, selectedRecord, limited = false, canReview = false, held = () => false, now = Date.now()}) {
+  if (state === 'loading') return {state, text: 'Checking request approvals…' + (rows?.length ? ' Previously loaded requests remain below; their status is not yet refreshed.' : '')};
+  if (state === 'error') return {state, text: 'Request approvals could not be checked. Refresh to try again.' + (rows?.length ? ' Previously loaded requests below may be out of date.' : ' The queue is not confirmed empty.')};
+  if (state === 'unavailable') return {state, text: 'Request approvals are unavailable for this session. The queue has not been checked.'};
+  if (state === 'authentication') return {state, text: 'Sign in again to check request approvals.'};
+  if (state !== 'ready' || rows === null) return {state: 'not-checked', text: 'Request approvals have not been checked.'};
+  const pending = [...rows];
+  if (selectedRecord?.status === 'pending' && !pending.some(item => item.id === selectedRecord.id)) pending.push(selectedRecord);
+  const count = pending.length, checks = pending.filter(item => Date.parse(item.expires_at) <= now || held(item.id)).length;
+  const bounded = limited || rows.length === 100;
+  if (!count && bounded) return {state: 'incomplete', text: 'No approvals remain among the loaded requests. The last check reached the 100-request limit; refresh to check for more.'};
+  if (!count) return {state: 'ready', text: 'No individual request approvals were pending at the last check. Image publications are listed separately.'};
+  return {state: bounded ? 'incomplete' : 'ready', text: count + ' request approval' + (count === 1 ? '' : 's') + ' shown.' +
+    (checks ? ' ' + checks + ' need' + (checks === 1 ? 's' : '') + ' a status check before any decision.' : '') +
+    (bounded ? ' Only the first 100 queue entries are loaded; more may exist.' : '') +
+    (canReview ? ' Select a request to inspect it before deciding.' : ' Select a request for details; review is currently unavailable.')};
+}
 function createPendingActionsView({onAuthenticationLost = () => {}, recoveryBlocked = () => false} = {}) {
   const el = id => document.getElementById(id);
   const node = (tag, text, className) => {
@@ -125,7 +142,7 @@ function createPendingActionsView({onAuthenticationLost = () => {}, recoveryBloc
   };
   let visible = false, generation = 0, controller = null, loading = false;
   let capability = null, rows = null, requestedId = null, invalidLink = false, opener = null, opening = false;
-  let selectedRecord, hostReview = null, publicCatalog = null;
+  let selectedRecord, hostReview = null, publicCatalog = null, queueState = 'not-checked', queueLimited = false;
   const hostMode = () => capability?.mode === 'host_trusted_v1';
   const status = message => { el('pending-actions-status').textContent = message; };
   const hold = id => {
@@ -261,7 +278,8 @@ function createPendingActionsView({onAuthenticationLost = () => {}, recoveryBloc
           const value = projectApprovalMetadata(await request(hostApprovalPrefix + '/' + item.id, AbortSignal.timeout(15000)));
           if (version !== generation || !visible) return;
           if (value.id !== item.id || value.assurance !== 'host-trusted') throw new Error('unavailable');
-          retireHostDecision(value); selectedRecord = value; rows = (rows || []).filter(row => row.id !== item.id);
+          retireHostDecision(value); selectedRecord = value;
+          rows = value.status === 'pending' ? (rows || []).map(row => row.id === item.id ? value : row) : (rows || []).filter(row => row.id !== item.id);
           status(value.status === 'pending' ? 'The request is still pending. The interrupted decision is not being resubmitted.' : 'Decision status: ' + value.status + '.');
         } catch (_) { if (version === generation) status('Decision status is unavailable. No decision was retried.'); }
         finally { if (version === generation) { opening = false; render(); } }
@@ -317,6 +335,10 @@ function createPendingActionsView({onAuthenticationLost = () => {}, recoveryBloc
     el('pending-actions-refresh').disabled = loading || opening;
     el('pending-actions').setAttribute('aria-busy', String(loading));
     el('pending-actions-access').textContent = openingReason();
+    const summary = pendingActionsSummary({state: queueState, rows, selectedRecord, limited: queueLimited,
+      canReview: Boolean(hostMode() ? capability.can_review : capability?.can_open_native_review && opener), held: id => Boolean(hold(id))});
+    el('pending-actions-summary').textContent = summary.text;
+    el('pending-actions-summary').dataset.state = summary.state;
     el('pending-actions-list').replaceChildren(...(rows || []).map(item => {
       const card = node('article', undefined, 'card'); card.dataset.pendingApprovalId = item.id;
       const {names, summary} = namedSummary(item);
@@ -330,7 +352,7 @@ function createPendingActionsView({onAuthenticationLost = () => {}, recoveryBloc
         requestedId = item.id; invalidLink = false; selectedRecord = undefined;
         hostReview = null;
         history.replaceState(null, '', '/approvals/' + item.id + '#pending-actions');
-        renderSelected(); el('pending-actions-selected').focus({preventScroll: true});
+        render(); el('pending-actions-selected').focus({preventScroll: true});
       });
       card.append(button); return card;
     }));
@@ -355,13 +377,13 @@ function createPendingActionsView({onAuthenticationLost = () => {}, recoveryBloc
     const version = ++generation;
     controller?.abort(); controller = new AbortController();
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]);
-    loading = true; capability = null; rows = null; selectedRecord = undefined; hostReview = null;
+    loading = true; queueState = 'loading'; capability = null; selectedRecord = undefined; hostReview = null;
     status('Loading individual request approvals…'); render();
     try {
       const nextCapability = projectApprovalCapabilities(await request('/api/approvals/capabilities', signal));
       if (version !== generation || !visible) return false;
       capability = nextCapability;
-      if (!capability.can_list) { status('Individual request approvals are unavailable for this session.'); return false; }
+      if (!capability.can_list) { queueState = 'unavailable'; rows = null; status('Individual request approvals are unavailable for this session.'); return false; }
       const prefix = hostMode() ? hostApprovalPrefix : '/api/approvals';
       const nextRows = projectPendingApprovals(await request(hostMode() ? prefix : prefix + '?status=pending', signal));
       if (hostMode() && nextRows.some(row => row.assurance !== 'host-trusted')) throw new Error('unavailable');
@@ -376,13 +398,16 @@ function createPendingActionsView({onAuthenticationLost = () => {}, recoveryBloc
           retireHostDecision(selectedRecord);
         }
       }
-      rows = nextRows;
-      status(rows.length ? rows.length + ' individual request' + (rows.length === 1 ? '' : 's') + ' awaiting approval. Showing at most the first 100.' :
+      rows = nextRows; queueLimited = nextRows.length === 100; queueState = 'ready';
+      const count = rows.length + (selectedRecord?.status === 'pending' && !rows.some(row => row.id === selectedRecord.id) ? 1 : 0);
+      status(count ? count + ' individual request' + (count === 1 ? '' : 's') + ' awaiting approval. Showing at most the first 100 queue entries.' :
         'No individual requests awaiting approval.');
       return true;
     } catch (error) {
       if (version !== generation || !visible) return false;
-      capability = null; rows = null; selectedRecord = undefined;
+      capability = null; selectedRecord = undefined;
+      queueState = error.message === 'authentication' ? 'authentication' : 'error';
+      if (queueState === 'authentication') rows = null;
       status(error.message === 'authentication' ? 'Your Catchplate session could not be verified. Reload and sign in again.' :
         'Individual request approvals could not be loaded. Refresh to try again; no private review or decision was requested.');
       return false;
@@ -398,7 +423,7 @@ function createPendingActionsView({onAuthenticationLost = () => {}, recoveryBloc
     requestedId = typeof selection.requestedId === 'string' && pendingApprovalUUID.test(selection.requestedId) ? selection.requestedId : null;
     invalidLink = selection.invalidLink === true || Boolean(selection.requestedId && !requestedId);
     if (!visible) {
-      ++generation; controller?.abort(); controller = null; loading = false; opening = false; capability = null; rows = null; selectedRecord = undefined;
+      ++generation; controller?.abort(); controller = null; loading = false; opening = false; capability = null; rows = null; selectedRecord = undefined; queueState = 'not-checked'; queueLimited = false;
       render(); return;
     }
     if (previousId !== requestedId && !opening) {
@@ -409,6 +434,7 @@ function createPendingActionsView({onAuthenticationLost = () => {}, recoveryBloc
   function authenticationLost() {
     ++generation; controller?.abort(); controller = null; loading = false; opening = false;
     capability = null; rows = null; selectedRecord = undefined; hostReview = null; publicCatalog = null;
+    queueState = 'authentication'; queueLimited = false;
     status('Your Catchplate session could not be verified. Reload and sign in again.'); render();
   }
   el('pending-actions-refresh').addEventListener('click', () => { void refresh(); });
@@ -424,4 +450,4 @@ function createPendingActionsView({onAuthenticationLost = () => {}, recoveryBloc
 }
 if (typeof module !== 'undefined' && module.exports) module.exports = {
   projectApprovalCapabilities, projectApprovalMetadata, projectPendingApprovals, projectHostApprovalReview,
-  pendingApprovalLocation, projectPendingCatalog, pendingApprovalLabels, createPendingActionsView};
+  pendingApprovalLocation, projectPendingCatalog, pendingApprovalLabels, pendingActionsSummary, createPendingActionsView};

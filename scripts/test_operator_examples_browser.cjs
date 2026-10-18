@@ -91,7 +91,7 @@ async function main() {
       await page.getByRole('button', {name: 'Configure client', exact: true}).click();
       await page.locator('#proxy-setup-content').waitFor({state: 'visible'});
       assert.equal(await page.locator('#proxy-rule').inputValue(), '', 'multiple permissions require explicit selection');
-      assert.match(await page.locator('#client-guidance').innerText(), /Choose one of this client’s saved permissions above/);
+      assert.match(await page.locator('#client-config-availability').innerText(), /Choose one of this client’s saved permissions/);
       assert(await page.locator('#copy-provider-config-command').isDisabled());
       assert(await page.locator('#download-config').isDisabled());
       await page.locator('#proxy-rule').selectOption(secondRule.id);

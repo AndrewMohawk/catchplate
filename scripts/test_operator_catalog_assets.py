@@ -209,7 +209,8 @@ class OperatorCatalogAssets(unittest.TestCase):
         self.assertNotIn('/api/operator-demo/credentials', upstreams)
         self.assertNotIn('/api/operator-demo/notifications', upstreams)
         self.assertNotIn('applications/rotate-token', upstreams)
-        self.assertIn("home.insertBefore(panel, element('proxy-setup-content'))", upstreams)
+        self.assertIn("element('proxy-operator-settings').append(panel)", upstreams)
+        self.assertNotIn("home.insertBefore(panel, element('proxy-setup-content'))", upstreams)
         self.assertIn('JSON.stringify(receipt.target_settings.allowed_upstreams)', upstreams)
 
     def test_npm_publishing_is_a_separate_explicit_form_without_response_or_approval_fields(self):
@@ -254,8 +255,15 @@ class OperatorCatalogAssets(unittest.TestCase):
         for forbidden in ('localStorage', 'indexedDB', 'innerHTML', '--insecure', '--proxy-insecure'):
             self.assertFalse(forbidden in script, forbidden + ' is not permitted in public assets')
         for name, source in scripts.items():
-            if name not in {'workspace_core.js', 'workspace_google_reauthorization.js', 'workspace_google_configuration.js', 'workspace_x_configuration.js', 'workspace_x_accounts.js', 'workspace_notifications.js', 'workspace_upstreams.js', 'workspace_pending_actions.js'}:
+            if name not in {'workspace_core.js', 'workspace_google_reauthorization.js', 'workspace_google_configuration.js', 'workspace_x_configuration.js', 'workspace_x_accounts.js', 'workspace_notifications.js', 'workspace_upstreams.js', 'workspace_pending_actions.js', 'workspace_ecr_publications.js'}:
                 self.assertFalse('sessionStorage' in source, name + ' must not persist client state')
+        # Existing ECR recovery markers contain only a public publication ID,
+        # not a token, key, review payload or provider response.
+        ecr = scripts['workspace_ecr_publications.js']
+        self.assertEqual(ecr.count('sessionStorage.setItem('), 2)
+        self.assertIn('sessionStorage.setItem(marker(item.id), item.id)', ecr)
+        self.assertIn('sessionStorage.setItem(retirementMarker(item.id), item.id)', ecr)
+        self.assertNotIn('sessionStorage.clear', ecr)
         core = scripts['workspace_core.js']
         self.assertIn("const key = 'catchplate.operator.mutation.review.v1', value = 'required';", core)
         self.assertEqual(re.findall(r'sessionStorage\.setItem\(([^)]*)\)', core), ['key, value'])
@@ -265,8 +273,14 @@ class OperatorCatalogAssets(unittest.TestCase):
                         core.index("const pending = api('/api/operator-demo/' + path"))
         pending_actions = scripts['workspace_pending_actions.js']
         self.assertIn("sessionStorage.getItem('catchplate.approvalDecisionUncertain.' + id)", pending_actions)
-        for mutation in ('sessionStorage.setItem', 'sessionStorage.removeItem', 'sessionStorage.clear'):
-            self.assertNotIn(mutation, pending_actions, 'metadata queue must not change decision recovery state')
+        # Explicit host-trusted decisions retain only the public request ID so
+        # a lost response cannot invite a duplicate decision. Metadata reads do
+        # not write a review receipt, decision body, token or provider secret.
+        self.assertIn("const key = 'catchplate.hostApprovalDecisionUncertain.' + item.id;", pending_actions)
+        self.assertEqual(re.findall(r'sessionStorage\.setItem\(([^)]*)\)', pending_actions), ['key, item.id'])
+        self.assertEqual(re.findall(r'sessionStorage\.removeItem\(([^)]*)\)', pending_actions),
+                         ["'catchplate.hostApprovalDecisionUncertain.' + item.id"])
+        self.assertNotIn('sessionStorage.clear', pending_actions)
         # Reauthorization retains only a public operation UUID for lost-response
         # recovery. Its existing browser suite checks the actual storage value;
         # no provider secret or application token may use this exception.

@@ -6,13 +6,25 @@ administrator access, a proxy build, a pilot or a verification ceremony.
 If you do not yet have access, send your operator to
 [first-client setup](wiki/Getting-started.md).
 
-During the [Catchplate rename](catchplate-rename.md), keep existing downloaded
-configurations unchanged and use the matching client release. New source names
-do not migrate saved permissions, placeholder headers or MCP launch paths;
-compatibility and the retained-instance cutover are not yet verified.
-For supported ordinary exports, follow the scoped
-[local migration guide](../examples/client-config-migration.md); unsupported
-signed/managed/ECR/custom configurations need a new operator handoff.
+## Before you start
+
+Ask your operator for this handoff; you should not have to reconstruct it from
+environment-variable examples:
+
+| Receive | Check |
+| --- | --- |
+| Complete private client JSON | Includes your client login and the exact saved permission; not just its nested `client_recipe`. |
+| Verified public interception CA | Its filename/location matches `ca_file`. If an outer-proxy CA is also needed, obtain that separate file and a compatible example. |
+| Job and example | Provider, allowed operation/resource, selected language and matching project/release. One permission is not arbitrary provider access. |
+| Access details | Token expiry, console URL for review/audit, and who can renew or repair access. The proxy URL is already in the JSON. |
+
+During the [Catchplate rename](catchplate-rename.md), the retained main instance
+still serves Serverware. Keep its existing downloads and matching client release
+together: checking out renamed source does not migrate that server. Renamed
+isolated/sandbox checks are not a completed main-instance cutover. Only after
+your operator confirms the corresponding server/permission migration, use the
+scoped [local converter](../examples/client-config-migration.md) for supported
+ordinary exports. Signed/managed/ECR/custom configurations need a new handoff.
 
 The JSON contains your expiring Catchplate login. Keep it out of Git, chat,
 prompts and logs. Keep the CA beside it when `ca_file` is
@@ -26,15 +38,8 @@ for your permission, and install dependencies **before** supplying its private
 configuration or exporting a client token. Subsequent runs reuse the environment;
 they do not need another install or build.
 
-For a common-app HTTP permission, from the repository root:
-
-```sh
-cd examples/common-apps
-python3.12 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-```
-
-Other maintained choices:
+Choose by **saved job**, then language. A GitHub or Gmail download is not a
+common-app `request.py` configuration.
 
 | Your job | Example and preparation |
 | --- | --- |
@@ -68,16 +73,49 @@ Use Go 1.25 or newer for Gmail/Alchemy, 1.23 or newer for the other projects.
 Run the resulting binary with `--config PATH`; do not use `go run` for each job.
 No Catchplate service or Rust build is required.
 
-## 2. Check your files, then run one read
+## 2. Run the matching read
 
 Keep the private download outside the checkout when practical and restrict its
 permissions, for example `chmod 600 /private/catchplate-client.private.json`.
 Do not paste the JSON into your shell or rename a provider key as a client token.
 
-From the prepared common-app example directory:
+### GitHub issues with Python
+
+For the first-client walkthrough's GitHub permission, prepare once from the
+repository root, without exporting the private token:
 
 ```sh
-.venv/bin/python request.py --config /private/catchplate-client.private.json --check-config
+cd examples/github-issues-python
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+Then run from that same directory, replacing the one config path with your file:
+
+```sh
+.venv/bin/python -I -B issues.py --config /private/catchplate-client.private.json --limit 10
+```
+
+This reads the configured repository; it does not create issues. The Python
+example requires a publicly trusted outer HTTPS proxy. For a separate private
+outer CA, use the [GitHub Node or Go recipe](wiki/Clients-and-recipes.md#nodejs-python-and-go-read-github-issues).
+Issue titles may be private: do not paste the output into a public log.
+
+### Common-app HTTP permission
+
+For a supported common-app download, prepare this **different** project once,
+starting again from the repository root:
+
+```sh
+cd examples/common-apps
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+From that directory, check your files without sending a request:
+
+```sh
+.venv/bin/python -I -B request.py --config /private/catchplate-client.private.json --check-config
 ```
 
 This checks the local JSON, token expiry, pinned dependencies, CA files and
@@ -89,7 +127,7 @@ have their own loaders; this checker is for common-app configurations only.
 If your permission is a read, run it deliberately:
 
 ```sh
-.venv/bin/python request.py --config /private/catchplate-client.private.json
+.venv/bin/python -I -B request.py --config /private/catchplate-client.private.json
 ```
 
 Or run your selected SDK's displayed command with the same `--config` path.
@@ -97,7 +135,13 @@ The complete download supplies the connection and exact scope: no separate
 proxy/app/provider-selector variables need retyping. `.env.example` files are
 reference material, not automatically loaded settings.
 
-Inspect the result and the matching Catchplate audit outcome. For errors:
+For the other languages/jobs, use the
+[prepared entrypoint table](wiki/Clients-and-recipes.md#prepared-read-commands).
+Do not execute all examples to test one permission. Install/build again only
+when deliberately changing the example or its dependencies, not at each run.
+
+Inspect the result and the matching Catchplate audit outcome, or ask your
+operator to check it if you do not have console access. For errors:
 
 - **Nothing was sent:** fix the named local config, dependency, CA or query
   problem. An expired client token needs a current operator-issued config.

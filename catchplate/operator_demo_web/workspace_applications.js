@@ -47,6 +47,7 @@ function createApplicationsView(workspace, actions = {}) {
     element('one-time-access').hidden = true; element('reveal-token').textContent = 'Reveal'; element('reveal-token').setAttribute('aria-pressed', 'false');
     for (const id of ['client-token', 'reveal-token', 'copy-token', 'dismiss-token']) element(id).disabled = true;
     element('download-config').disabled = true;
+    element('token-add-permission').setAttribute('aria-disabled', 'true');
     if (reason) element('token-expiry-status').textContent = reason;
   }
   function reconcile() {
@@ -114,6 +115,11 @@ function createApplicationsView(workspace, actions = {}) {
   element('dismiss-token').addEventListener('click', () => {
     if (held && window.confirm('Clear the one-time token from this page? It cannot be retrieved again.')) { clear(); workspace.emit(); }
   });
+  element('token-add-permission').addEventListener('click', event => {
+    event.preventDefault(); reconcile();
+    if (!held || workspace.state.busy || workspace.state.uncertain || !actions.addPermission?.(held.id))
+      element('token-status').textContent = 'Client setup could not be opened. Keep any current setup draft, resolve pending changes and refresh saved state before continuing. No permission was granted.';
+  });
   function loginIdentity(application) {
     return JSON.stringify(Object.fromEntries(['id', 'name', 'status', 'created_at', 'revoked_at', 'principal_id',
       'token_expires_at_epoch_ms', 'token_generation', 'active_rule_count'].map(name => [name, application[name]])));
@@ -179,6 +185,8 @@ function createApplicationsView(workspace, actions = {}) {
   }
   function render() {
     reconcile(); const catalog = workspace.state.catalog;
+    element('token-add-permission').setAttribute('aria-disabled', String(!held || workspace.state.busy ||
+      workspace.state.uncertain || typeof actions.addPermission !== 'function'));
     element('application-fields').disabled = !workspace.ready('applications');
     element('application-proxy-default').textContent = newApplicationProxyAuthentication(catalog).proxy_authentication ?
       'New apps use standard proxy login: public application ID as username, application token as password. Bearer also remains supported. Never use the provider key.' :

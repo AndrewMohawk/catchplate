@@ -408,6 +408,14 @@ function createConnectView(workspace, applications, proxy) {
     fields('connect-github-type-group', connectionMethod === 'github' && !saveOnly);
     fields('connect-provider-secret-group', newCredential && !['x', 'alchemy'].includes(connectionMethod) && !newGithubApp());
     fields('connect-github-app-fields', newGithubApp());
+    const guide = !newCredential ? null : connectionMethod === 'common' ? commonPreset()?.id :
+      connectionMethod === 'github' ? newGithubApp() ? 'github_app' : 'github_token' :
+        connectionMethod === 'key' ? 'manual' : connectionMethod;
+    renderCredentialGuide('connect-credential-guide', guide, newGithubApp() ? {
+      app_id: 'connect-github-app-id', owner: 'connect-github-app-owner', repo: 'connect-github-app-repo',
+      private_key: 'connect-github-private-key', installation_id: 'connect-github-installation-id'} : {
+      secret: connectionMethod === 'x' ? 'connect-x-secret' : connectionMethod === 'alchemy' ?
+        'connect-alchemy-secret' : 'connect-credential-secret'});
     for (const option of element('connect-github-type').options) option.disabled = option.value === 'github_app_v1' ?
       !catalog()?.capabilities.github_app : !catalog()?.capabilities.github;
     element('connect-github-token-note').hidden = connectionMethod !== 'github' || newGithubApp();

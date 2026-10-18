@@ -63,7 +63,7 @@ function load(extras = {}) {
   return context.module.exports;
 }
 function fixture(options = {}) {
-  const nodes = new Map(['pending-actions', 'pending-actions-status', 'pending-actions-access', 'pending-actions-refresh',
+  const nodes = new Map(['pending-actions', 'pending-actions-status', 'pending-actions-summary', 'pending-actions-access', 'pending-actions-refresh',
     'pending-actions-list', 'pending-actions-selected'].map(id => [id, new Node()]));
   const node = id => { assert(nodes.has(id), 'known queue DOM target'); return nodes.get(id); };
   const calls = [], faults = [], replacements = [], storageReads = [], events = {}, storage = new Map(options.storage || []);
@@ -123,6 +123,44 @@ function workspaceFixture(handler) {
     verify() { assert.deepEqual(faults, []); }};
 }
 const tests = [
+  ['queue summary distinguishes unchecked loading failure bounded counts and selected pending records', async () => {
+    const api = load(), summary = state => api.pendingActionsSummary({state, rows: [], selectedRecord: undefined});
+    assert.equal(summary('not-checked').state, 'not-checked'); assert.match(summary('loading').text, /Checking/);
+    assert.match(summary('error').text, /not confirmed empty/); assert.match(summary('unavailable').text, /unavailable/);
+    assert.match(summary('ready').text, /No individual request approvals were pending/);
+    const bounded = api.pendingActionsSummary({state: 'ready', rows: Array.from({length: 100}, (_, n) => approval({id: String(n)})), now: NOW});
+    assert.equal(bounded.state, 'incomplete'); assert.match(bounded.text, /more may exist/);
+    const drainedPage = api.pendingActionsSummary({state: 'ready', rows: [], limited: true});
+    assert.equal(drainedPage.state, 'incomplete'); assert.match(drainedPage.text, /refresh to check for more/);
+    const outside = api.pendingActionsSummary({state: 'ready', rows: [], selectedRecord: approval(), canReview: true, now: NOW});
+    assert.match(outside.text, /^1 request approval shown/); assert(!outside.text.includes('No individual'));
+    const held = api.pendingActionsSummary({state: 'ready', rows: [approval()], held: () => true, now: NOW});
+    assert.match(held.text, /1 needs a status check/);
+    const delayed = deferred(); const f = fixture({handler: call => call.path === CAP ? response(capability()) : delayed.promise});
+    f.view.show(true); await flush(); assert.equal(f.node('pending-actions-summary').dataset.state, 'loading');
+    delayed.release(response([])); await flush(); assert.equal(f.node('pending-actions-summary').dataset.state, 'ready'); f.verify();
+  }],
+  ['failed queue refresh retains stale rows without offering a new review', async () => {
+    let fail = false;
+    const f = fixture({handler: call => call.path === CAP ? response(capability({can_open_native_review: true, can_decide: true, reason: null})) :
+      fail ? response({}, 503) : response([approval()])});
+    f.view.setReviewOpener(() => assert.fail('stale rows must not open review'));
+    await f.show({requestedId: ID}); fail = true; await f.view.refresh();
+    assert.equal(f.node('pending-actions-list').children.length, 1);
+    assert.equal(f.node('pending-actions-summary').dataset.state, 'error');
+    assert.match(f.node('pending-actions-summary').textContent, /out of date/);
+    assert(!f.buttons().some(button => button.textContent === 'Review request')); f.verify();
+  }],
+  ['recovery check keeps a still-pending request in the displayed queue and count', async () => {
+    const f = fixture({host: true, rows: [hostApproval()], selected: hostApproval(),
+      storage: [['catchplate.hostApprovalDecisionUncertain.' + ID, ID]]});
+    await f.show({requestedId: ID}); await f.buttons()[0].events.click(); await flush();
+    assert.equal(f.node('pending-actions-list').children.length, 1);
+    assert.match(f.node('pending-actions-summary').textContent, /^1 request approval shown/);
+    assert.match(f.node('pending-actions-summary').textContent, /needs a status check/);
+    assert.equal(f.storage.get('catchplate.hostApprovalDecisionUncertain.' + ID), ID);
+    assert(f.calls.every(call => call.init.method === 'GET')); f.verify();
+  }],
   ['rename recovery conflicts permit status reads but cannot open or submit any approval', async () => {
     for (const host of [false, true]) {
       const f = fixture({host, recoveryBlocked: true, rows: [host ? hostApproval() : approval()]});

@@ -106,8 +106,34 @@ function projectEcrReview(value, publication) {
     review_expires_at_epoch_ms: value.review_expires_at_epoch_ms};
 }
 function ecrPublicationLabel(item) { return item.scope.repository_name + ':' + item.scope.image_tag + ' · ' + item.manifest_digest.slice(0, 19) + '… · ' + ecrPublicationStates[item.status]; }
+function ecrPublicationsSummary({state, rows, nextCursor, busy = false, failed = false, held = () => false, now = Date.now()}) {
+  if (state === 'loading') return {state, text: 'Checking image publications…' + (rows.length ? ' Previously loaded images remain below.' : '')};
+  if (state === 'error') return {state, text: 'Image publications could not be checked. Refresh to try again.' +
+    (rows.length ? ' The ' + rows.length + ' loaded image(s) may be out of date; counts are incomplete.' : ' The queue is not confirmed empty.')};
+  if (state === 'authentication') return {state, text: 'Sign in again to check image publications.'};
+  if (state !== 'ready') return {state: 'not-checked', text: 'Image publications have not been checked.'};
+  if (busy) return {state: 'loading', text: 'Updating the selected image’s status… Counts below are from the last completed check.'};
+  if (failed) return {state: 'error', text: 'The last image status or action could not be confirmed. Check the message below; do not repeat an uncertain action.'};
+  if (!rows.length) return {state: 'ready', text: 'No image publications were found at the last check. Stage an image from a configured client to request review.'};
+  let review = 0, check = 0, client = 0, progress = 0, history = 0;
+  for (const item of rows) {
+    if (held(item.id) || ['uncertain', 'suspended'].includes(item.status) || item.artifact_retirement_status === 'pending' ||
+        ['staging', 'awaiting_review', 'approved', 'active'].includes(item.status) && item.expires_at_epoch_ms <= now) check++;
+    else if (item.status === 'awaiting_review') review++;
+    else if (item.status === 'approved') client++;
+    else if (['staging', 'active'].includes(item.status)) progress++;
+    else history++;
+  }
+  const counts = [[review, 'awaiting review'], [check, check === 1 ? 'needs a status check' : 'need a status check'], [client, 'waiting for the client'],
+    [progress, 'staging or publishing'], [history, 'completed or closed']].filter(([count]) => count).map(([count, label]) => count + ' ' + label).join(' · ');
+  return {state: nextCursor ? 'incomplete' : 'ready', text: rows.length + ' loaded image publication' + (rows.length === 1 ? '' : 's') + ': ' + counts + '.' +
+    (nextCursor ? ' More pages are available; use Load more. These counts cover only loaded images.' : '') +
+    (check ? ' Inspect the images needing a status check; do not retry automatically.' : review ? ' Select an image to inspect before deciding.' :
+      client ? 'Approval does not publish; the client must explicitly start the approved image.' : ' Select an image to inspect its status and history.')};
+}
 function createEcrPublicationsView(workspace) {
   let visible = false, rows = [], nextCursor = null, selectedId = '', review = null, busy = false, epoch = 0, controller = null, clientContext = '', retireConfirmationId = '';
+  let queueState = 'not-checked', summaryFailed = false;
   const el = element, node = textNode, selected = () => rows.find(item => item.id === selectedId);
   const capability = () => projectEcrCapability(workspace.state.catalog?.capabilities.ecr_publication);
   const message = text => { el('ecr-publications-status').textContent = text; };
@@ -175,6 +201,10 @@ function createEcrPublicationsView(workspace) {
     el('ecr-publications-refresh').disabled = busy;
     el('ecr-publications-load-more').hidden = nextCursor === null;
     el('ecr-publications-load-more').disabled = busy;
+    const summary = ecrPublicationsSummary({state: queueState, rows, nextCursor, busy, failed: summaryFailed,
+      held: id => held(id) || retirementHeld(id)});
+    el('ecr-publications-summary').textContent = summary.text;
+    el('ecr-publications-summary').dataset.state = summary.state;
     const list = el('ecr-publications-list'); list.replaceChildren();
     for (const item of rows) {
       const card = node('article', undefined, 'card'), named = names(item);
@@ -228,22 +258,24 @@ function createEcrPublicationsView(workspace) {
     const raw = await response.text(); if (raw.length > 2097152) throw new Error('unavailable');
     if (version !== epoch) throw new Error('discarded'); return JSON.parse(raw);
   }
-  async function run(work, failure) {
+  async function run(work, failure, onFailure = () => {}) {
     if (busy) return; busy = true; controller = new AbortController(); const version = ++epoch, activeController = controller;
+    summaryFailed = false;
     const timer = setTimeout(() => activeController.abort(), 30000); render();
     try { await work(version); }
-    catch (_) { if (version === epoch) message(failure); }
+    catch (_) { if (version === epoch) { summaryFailed = true; onFailure(); message(failure); } }
     finally { clearTimeout(timer); if (version === epoch) { busy = false; controller = null; render(); } }
   }
   async function load(more = false) {
+    if (busy) return;
     const cursor = more ? nextCursor : null; if (more && !cursor) return;
-    review = null; retireConfirmationId = '';
+    review = null; retireConfirmationId = ''; queueState = 'loading';
     await run(async version => {
       const page = projectEcrPublications(await request(ecrPublicationPrefix + (cursor ? '?before=' + cursor : ''), undefined, version));
       if (cursor && (page.next_cursor === cursor || page.publications.some(item => rows.some(old => old.id === item.id)))) throw new Error('repeated page');
-      rows = cursor ? [...rows, ...page.publications] : page.publications; nextCursor = page.next_cursor;
+      rows = cursor ? [...rows, ...page.publications] : page.publications; nextCursor = page.next_cursor; queueState = 'ready';
       message(rows.length ? rows.length + ' publication(s) loaded. ' + (nextCursor ? 'More are available; use Load more.' : 'All available publications are loaded.') + ' Select one exact image to inspect.' : 'No staged image publications. Stage an image using your configured client.'); },
-    'Staged publications could not be loaded. No review, decision or AWS request was sent.');
+    'Staged publications could not be loaded. No review, decision or AWS request was sent.', () => { queueState = 'error'; });
   }
   async function readSelected() {
     const id = selectedId; if (!ecrPublicationUUID.test(id)) return; review = null; retireConfirmationId = '';
@@ -293,7 +325,7 @@ function createEcrPublicationsView(workspace) {
     }, 'The local retirement outcome is unknown. Check its status before any manual retry. No AWS deletion was requested.');
   }
   function authenticationLost() {
-    ++epoch; controller?.abort(); controller = null; busy = false; rows = []; nextCursor = null; selectedId = ''; review = null; retireConfirmationId = ''; render();
+    ++epoch; controller?.abort(); controller = null; busy = false; rows = []; nextCursor = null; selectedId = ''; review = null; retireConfirmationId = ''; queueState = 'authentication'; summaryFailed = false; render();
     message('Your session could not be verified. Reload and sign in again.');
   }
   el('ecr-publications-refresh').addEventListener('click', () => { if (!busy) void load(); });
@@ -309,7 +341,7 @@ function createEcrPublicationsView(workspace) {
   render();
   return {show(value) {
     const first = !visible && value; visible = Boolean(value);
-    if (!visible) { ++epoch; controller?.abort(); controller = null; busy = false; review = null; retireConfirmationId = ''; }
+    if (!visible) { ++epoch; controller?.abort(); controller = null; busy = false; review = null; retireConfirmationId = ''; if (queueState === 'loading') queueState = 'error'; }
     render(); if (first && capability() && !rows.length) void load();
   }, load, authenticationLost};
 }

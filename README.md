@@ -49,8 +49,10 @@ repository, channel or model. If any of those inputs is missing, use the
 To save a key: **Credentials → choose provider → paste key → Save credential**.
 The provider settings and suggested name are filled in. Saving it does not
 create a client or grant access. OAuth accounts and GitHub Apps have their own
-provider-specific setup. If you do not have the provider credential yet, start
-with [provider setup](docs/wiki/Credentials-and-providers.md), not a client token.
+provider-specific setup. Each form includes a short acquisition guide, official
+documentation links and field-format hints. If you do not have the provider
+credential yet, follow that guide or [provider setup](docs/wiki/Credentials-and-providers.md),
+not the client-token workflow.
 
 To use it: choose **Use with a client**, select or create the client, and choose
 a scoped permission. Download its private client configuration and the public

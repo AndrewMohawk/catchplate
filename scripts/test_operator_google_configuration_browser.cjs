@@ -333,6 +333,11 @@ const tests = [
   }],
   ['review presents exact callback and Gmail addition; Prepare is write-only and never hot applies', (browser, directory) => fixture(browser, {}, async (page, state, observed) => {
     await inspect(page);
+    const help = page.locator('#google-configuration-guide > details');
+    assert.equal(await help.evaluate(node => node.open), false, 'application acquisition help starts compact');
+    await help.locator('summary').focus(); await page.keyboard.press('Enter');
+    assert(await help.locator('ol').isVisible(), 'operator instructions remain keyboard accessible');
+    await help.locator('summary').click();
     assert.equal((await node(page, 'callback').innerText()).trim(), profile().redirect_uri);
     await node(page, 'scopes').locator('..').locator(':scope > summary').click();
     assert(await node(page, 'scopes').isVisible());
@@ -346,6 +351,8 @@ const tests = [
     assert.deepEqual(state.settings, OLD); assert.deepEqual(state.allowedUpstreams, OLD.allowed_upstreams);
     assert.match(await node(page, 'operation-status').innerText(), /prepared|pending/i);
     assert.match(await node(page, 'operation-status').innerText(), /restart/i);
+    assert((await node(page, 'operation').boundingBox()).y < (await page.locator('#google-configuration-guide').boundingBox()).y,
+      'pending activation actions precede acquisition help');
     assert(await node(page, 'prepare').isDisabled()); assert(!await node(page, 'cancel').isDisabled());
     assert.deepEqual(await noMaterial(page), {operation_id: observed.operation.operation_id, kind: 'prepare'});
     await page.setViewportSize({width: 390, height: 844});

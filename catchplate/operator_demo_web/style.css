@@ -6,6 +6,7 @@ fieldset{margin:0;padding:0;border:0;min-width:0}label,legend{display:block;font
 #credential-replace-panel{overflow-wrap:anywhere}
 .credential-guide{border:1px solid var(--line);border-left:3px solid var(--green);border-radius:8px;background:#f7faf6;padding:16px 18px;margin:0 0 20px;overflow-wrap:anywhere}
 .credential-guide h3{margin-bottom:8px}.credential-guide ol{margin:0 0 10px;padding-left:22px}.credential-guide li+li{margin-top:5px}
+.credential-guide>details{border:0;margin:0;padding:0}.credential-guide summary h3{display:inline;margin:0;font-size:14px}.credential-guide details:not([open]) summary{margin:0}
 .credential-guide-links{display:flex;flex-wrap:wrap;gap:8px 18px}.credential-guide-links a{font-weight:600;font-size:12px;min-height:24px}
 .credential-format-hint{margin-top:-6px;overflow-wrap:anywhere}
 #application-renewal-summary{overflow-wrap:anywhere}

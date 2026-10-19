@@ -6,7 +6,13 @@
 
 ## Configure a client, not the console URL
 
-Open **Proxy setup → Connect a client**, select the client and permission, and copy the displayed proxy endpoint/login settings. **Administrator settings** is a separate view for destination and OAuth application configuration; it is not part of running a client. The retained browser console at `https://serverware.example.com/` and the forward proxy are different services. The Catchplate hostname cutover is pending; follow [rename status](../catchplate-rename.md) and do not rewrite an existing private configuration. Do not invent a port or use a private management address as the proxy.
+Open **Proxy setup → Connect a client** and select the client and permission. For a supplied example, use the complete private configuration and CA downloads; the file already contains the proxy endpoint and client login. **Proxy connection details and manual setup** contains those settings when configuring your own HTTP client. **Administrator settings** is a separate view for destination and OAuth application configuration; it is not part of running a client. The retained browser console at `https://serverware.example.com/` and the forward proxy are different services. The Catchplate hostname cutover is pending; follow [rename status](../catchplate-rename.md) and do not rewrite an existing private configuration. Do not invent a port or use a private management address as the proxy.
+
+Before a client and permission are selected, the page explains what is missing
+instead of showing an empty request template. **Add a permission for …** carries
+that exact client into guided setup without creating access. Expired clients
+need explicit lifecycle review; nothing is renewed automatically. The public
+CA download and manual proxy endpoint remain available before client setup.
 
 For **standard client login**, the username is the Catchplate client ID and the password is its expiring proxy token. Retained Bearer-only clients must use their advertised mode or be explicitly changed in **Clients**; a recipe does not silently migrate them. The token authenticates to Catchplate, not to GitHub, Google or npm.
 
@@ -44,7 +50,7 @@ Origins referenced by active rules cannot simply be removed. Revoke the affected
 
 This is operator configuration, not an individual user's account connection:
 
-1. Open **Proxy setup → Google provider settings → Review Google provider settings**.
+1. Open **Proxy setup → Administrator settings → Google provider settings → Review Google provider settings**. Expand the acquisition guide if you still need an OAuth application.
 2. Register the displayed exact callback URI in your Google OAuth application and review the fixed Gmail read-only scope/destination.
 3. Enter the OAuth client ID and write-only application secret, then choose **Prepare Google configuration**.
 4. Preparation stores inactive encrypted configuration. The deployment owner must perform its separate controlled cold restart and confirm the matching app/proxy readiness.
@@ -54,7 +60,7 @@ The page does not create a Google project, restart services or start consent on 
 
 ## Configure the proxy's X OAuth application
 
-When the feature is offered, open **Proxy setup → X (Twitter) application → Review X application settings**. Register the exact displayed callback in X and enter the OAuth **Client ID and Client secret**, not an app-only bearer token. Review the fixed permissions, then save.
+When the feature is offered, open **Proxy setup → Administrator settings → X (Twitter) application → Review X application settings**. Expand its acquisition guide if needed. Register the exact displayed callback in X and enter the OAuth **Client ID and Client secret**, not an app-only bearer token. Review the fixed permissions, then save.
 
 Unlike Google preparation, this settings save is immediate and does not require a restart. It still does not contact X, connect an account, approve a destination or grant posting permission. Replacing a saved X application is not currently offered. Continue only when the instance reports the matching provider/policy readiness. [Current configuration UI](https://github.com/AndrewMohawk/catchplate/blob/main/catchplate/operator_demo_web/index.html), [X readiness checks](https://github.com/AndrewMohawk/catchplate/blob/main/catchplate/operator_x_readiness.py).
 

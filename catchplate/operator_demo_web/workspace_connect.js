@@ -52,6 +52,7 @@ function createConnectView(workspace, applications, proxy) {
   let selectedCommonApp = '';
   let saveOnly = false; let savedCredential = '';
   let pendingCredentialFocus = '';
+  let credentialTemplateKey = '';
   let includeDiagnostics = false;
   element('connect-x-post-quota').value = 'none';
   const catalog = () => workspace.state.catalog;
@@ -76,9 +77,15 @@ function createConnectView(workspace, applications, proxy) {
     if (template.method === 'github') element('connect-github-type').value = template.githubType;
     const names = {key: 'API key', github: template.githubType === 'github_app_v1' ? 'GitHub App' : 'GitHub token',
       npm: 'npm token', x: 'X lookup token', alchemy: 'Alchemy key', common: (commonAppPreset(catalog(), selectedCommonApp)?.label || 'App') + ' key'};
-    element('connect-credential-name').value = names[template.method];
-    if (template.method === 'x') element('connect-x-name').value = names.x;
-    if (template.method === 'alchemy') element('connect-alchemy-name').value = names.alchemy;
+    const key = [template.method, template.githubType || '', template.appPreset || ''].join(':');
+    // Returning from account setup to the same local editor must not overwrite
+    // its name. Different providers and explicit new drafts still get defaults.
+    if (key !== credentialTemplateKey) {
+      element('connect-credential-name').value = names[template.method];
+      if (template.method === 'x') element('connect-x-name').value = names.x;
+      if (template.method === 'alchemy') element('connect-alchemy-name').value = names.alchemy;
+    }
+    credentialTemplateKey = key;
     element('connect-credential-choice').value = '';
     return true;
   }
@@ -1025,6 +1032,7 @@ function createConnectView(workspace, applications, proxy) {
   element('connect-status-refresh').addEventListener('click', () => workspace.refresh({manual: true}));
   function resetDraft() {
     pendingCredentialFocus = '';
+    credentialTemplateKey = '';
     element('connect-approval-required').checked = false;
     selectedCredential = ''; selectedApplication = ''; selectedRule = ''; review = null; checkpoint = null; savedCredential = '';
     includeDiagnostics = false;

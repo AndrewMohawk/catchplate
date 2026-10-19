@@ -110,7 +110,7 @@ function operatorFileHandoff(rule, runtime) {
   return profile ? {profiles, directory: profile.directory, preparation: 'cd ' + profile.directory + '\n' + profile.preparation,
     commands: profile.command, note: 'Run from ' + profile.directory + ' after the one-time preparation. Keep the JSON and verified CA together; replace the config path if stored elsewhere. ' + profile.note} : null;
 }
-function createProxyView(workspace, applications) {
+function createProxyView(workspace, applications, actions = {}) {
   const home = element('proxy'); const content = element('proxy-setup-content');
   let command = '';
   let handoffCommand = '';
@@ -121,6 +121,7 @@ function createProxyView(workspace, applications) {
   const gmailLanguages = new Map();
   let githubContext = '';
   let alchemyContext = '';
+  let permissionClient = '';
   function gmailSdkOptions(catalog, application, rule) {
     return {proxyUrl: catalog.proxy_url, applicationId: application.id, accessRuleId: rule.id,
       tokenExpiresAtEpochMs: application.token_expires_at_epoch_ms,
@@ -129,16 +130,23 @@ function createProxyView(workspace, applications) {
   }
   function configAvailability(application, rule, configured = false) {
     const catalog = workspace.state.catalog;
+    const selected = Boolean(catalog && application && rule);
+    for (const id of ['client-config-fields', 'client-config-examples', 'client-compatibility-limits']) element(id).hidden = !selected;
+    element('download-config').hidden = !selected;
+    element('client-template-warning').hidden = !selected;
+    const next = element('client-config-next');
+    next.hidden = true; next.href = '#applications'; permissionClient = '';
+    const offer = (label, target) => { next.hidden = false; next.textContent = label; next.href = target; };
     let message;
     if (!catalog) message = 'Download unavailable: refresh workspace status to confirm the saved client and permission.';
     else if (workspace.state.uncertain) message = 'Download unavailable: review the uncertain change and refresh saved state first. No operation will be repeated automatically.';
     else if (workspace.state.busy) message = 'Download unavailable while a workspace operation is in progress.';
     else if (!application) message = 'Choose a client and a saved permission to prepare its private config.';
-    else if (!rule) message = catalog.access_rules.some(item => item.status === 'active' && item.application_id === application.id) ?
-      'Choose one of this client’s saved permissions to prepare its private config.' :
-      'This client has no saved permission. Add a permission in Clients before preparing its config.';
     else if (application.token_status !== 'valid' || !Number.isSafeInteger(application.token_expires_at_epoch_ms) || application.token_expires_at_epoch_ms <= Date.now())
       message = 'Download unavailable: this client token is expired, revoked or cannot be verified. Use Clients to explicitly rotate it if needed; no token is renewed automatically.';
+    else if (!rule) message = catalog.access_rules.some(item => item.status === 'active' && item.application_id === application.id) ?
+      'Choose one of this client’s saved permissions to prepare its private config.' :
+      'This client has no saved permission. Add a permission before preparing its config.';
     else if (!operatorRuleSupported(rule, catalog) || !catalog.credentials.some(item => item.id === rule.credential_id && item.status === 'active'))
       message = 'Download unavailable: the saved permission, credential or required provider capability is unavailable. Review its current setup before use.';
     else if (!workspace.loaded() || rule.enforcement !== 'active' || application.access_status !== 'active')
@@ -150,7 +158,29 @@ function createProxyView(workspace, applications) {
     const status = element('client-config-availability');
     status.textContent = message;
     status.dataset.state = configured && !element('download-config').disabled ? 'available' : 'unavailable';
+    if (!catalog || workspace.state.busy) return;
+    if (workspace.state.uncertain) offer('Review the unresolved change', '#overview');
+    else if (!application) offer('Set up access for a client', '#connect');
+    else if (application.token_status !== 'valid' || !Number.isSafeInteger(application.token_expires_at_epoch_ms) || application.token_expires_at_epoch_ms <= Date.now())
+      offer('Review this client’s access in Clients', '#applications');
+    else if (!rule && !catalog.access_rules.some(item => item.status === 'active' && item.application_id === application.id)) {
+      if (typeof actions.addPermission === 'function') {
+        permissionClient = application.id; offer('Add a permission for ' + application.name, '#connect');
+      } else offer('Add a permission in Clients', '#applications');
+    } else if (rule && (!operatorRuleSupported(rule, catalog) || !catalog.credentials.some(item => item.id === rule.credential_id && item.status === 'active')))
+      offer('Review the saved permission', '#access-rules');
+    else if (rule && !applications.tokenFor(application.id))
+      offer('Review this client’s access in Clients', '#applications');
   }
+  element('client-config-next').addEventListener('click', event => {
+    if (!permissionClient) return;
+    event.preventDefault();
+    const id = permissionClient;
+    if (workspace.state.busy || workspace.state.uncertain || element('proxy-application').value !== id ||
+        !workspace.state.catalog?.applications.some(item => item.id === id && item.status === 'active')) return;
+    // The existing setup owner preserves exact identity and asks before replacing a draft.
+    actions.addPermission?.(id);
+  });
   renderOperatorCompatibility('client-compatibility-content');
   function render() {
     element('client-template-title').textContent = 'Client configuration';
@@ -185,7 +215,8 @@ function createProxyView(workspace, applications) {
     const application = catalog.applications.find(item => item.id === element('proxy-application').value);
     const clientRules = catalog.access_rules.filter(item => item.status === 'active' && item.application_id === application?.id);
     chooseOptions('proxy-rule', ruleChoiceRequired === application?.id ?
-      [{id: '', name: 'Choose a permission for this client'}, ...clientRules] : clientRules, 'Add a permission for this client');
+      [{id: '', name: 'Choose a permission for this client'}, ...clientRules] : clientRules,
+      application ? 'No saved permission for this client' : 'Choose a client first');
     const rule = catalog.access_rules.find(item => item.id === element('proxy-rule').value);
     configAvailability(application, rule);
     const nextTemplateContext = application?.id + ':' + rule?.id;

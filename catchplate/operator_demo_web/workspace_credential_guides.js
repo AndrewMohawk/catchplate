@@ -29,7 +29,10 @@ function renderCredentialGuide(containerId, guideId, fieldIds = {}) {
         link.append(textNode('span', ' (opens in a new tab)', 'sr-only'));
         links.append(link);
       }
-      container.append(heading, steps, links);
+      if (['github_app', 'google_application', 'x_application'].includes(guideId)) {
+        const help = document.createElement('details'), summary = document.createElement('summary');
+        summary.append(heading); help.append(summary, steps, links); container.append(help);
+      } else container.append(heading, steps, links);
     }
   }
   for (const [field, id] of Object.entries(fieldIds)) {

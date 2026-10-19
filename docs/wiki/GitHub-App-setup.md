@@ -63,6 +63,10 @@ Never put the PEM in the example project, a workflow secret, chat or a screensho
 
 In Catchplate, open **Credentials → GitHub App** and fill in:
 
+The expandable **Connect a GitHub App installation** guide links to the provider
+instructions if you still need to register or install the App. Field-format
+hints remain visible while that guide is closed.
+
 | Catchplate field | Value for this example |
 | --- | --- |
 | Credential name | A useful label, such as `Issue reader — team repository` |
@@ -84,14 +88,17 @@ the PEM; it is not available in client configuration. [Implemented connection co
 ## 4. Give one client read access and run it
 
 1. On the saved credential, choose **Use with a client**. Create or select the
-   workload's Catchplate client and privately save any new proxy token.
+   workload's Catchplate client. Keep the tab open until its new one-time token
+   is saved in the private configuration; copying the raw token is optional.
 2. Grant **Read issues and comments** for the saved repository. Wait for the
    permission to become active; provider verification is not policy activation.
-3. In **Proxy setup**, select that client/permission and download its CA.
-4. Follow the [GitHub Node/Python/Go recipes](Clients-and-recipes.md#nodejs-python-and-go-read-github-issues).
-   Prepare dependencies before supplying the Catchplate token. For the Node
-   project, set its documented client/CA/owner/repository inputs and run
-   `node client.mjs list` from `examples/github-issues-node`.
+3. Stay on setup's final screen and download its private client configuration
+   and public CA together. If returning later, select that client/permission in
+   **Proxy setup → Connect a client**; the old one-time token is not recoverable.
+4. Choose a language under **Run a prepared example** and follow its preparation
+   and run commands. The [GitHub Node/Python/Go recipes](Clients-and-recipes.md#nodejs-python-and-go-read-github-issues)
+   consume the complete file with `--config`; no owner, repository or proxy-login
+   variables need retyping. Prepare dependencies before supplying the private file.
 5. Check the read result and its matching **Audit log** outcome. An empty issue
    list can be a valid result. Treat private-repository output as private.
 

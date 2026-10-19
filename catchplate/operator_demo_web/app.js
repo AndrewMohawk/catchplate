@@ -78,7 +78,7 @@ else {
   createAccessRulesView(workspace, {configure: configureClient});
   const applications = createApplicationsView(workspace, {configure: id => configureClient(id), addPermission: id => connect.selectApplication(id)});
   reauthorization = createGoogleReauthorizationView(workspace, applications);
-  proxy = createProxyView(workspace, applications); const audit = createAuditView(workspace);
+  proxy = createProxyView(workspace, applications, {addPermission: id => connect.selectApplication(id)}); const audit = createAuditView(workspace);
   const upstreams = createUpstreamsView(workspace);
   const googleConfiguration = createGoogleConfigurationView(workspace);
   const xConfiguration = createXConfigurationView(workspace);

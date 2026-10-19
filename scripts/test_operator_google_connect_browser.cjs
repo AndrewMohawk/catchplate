@@ -4,7 +4,8 @@
 // callback, OAuth exchange, provider API, proxy or native download is contacted.
 const assert = require('node:assert/strict');
 const {createHash} = require('node:crypto');
-const {readFile, mkdtemp, stat} = require('node:fs/promises');
+const {readFile, mkdtemp} = require('node:fs/promises');
+const {tmpdir} = require('node:os');
 const {join, resolve} = require('node:path');
 const {fixture: baseFixture, ready, view, credential, application, IDS, NOW} = require('./test_operator_catalog_browser.cjs');
 const {publicCatalog, google} = require('./test_operator_ordinary_modes_browser.cjs');
@@ -165,8 +166,6 @@ async function open(page) {
 }
 async function managementGoogle(page) {
   await view(page, 'credentials');
-  const disclosure = page.locator('#credential-google-connect').locator('xpath=ancestor::details[1]');
-  if (!await disclosure.evaluate(node => node.open)) await disclosure.locator(':scope > summary').click();
   await page.locator('#credential-google-connect').click();
   await page.locator('#google-consent-panel').waitFor({state: 'visible'}); await exclusiveGoogle(page);
   await page.waitForLoadState('networkidle');
@@ -410,8 +409,7 @@ async function main() {
   const before = await hashes(); console.log(JSON.stringify({phase: 'source-before', hashes: before}));
   console.log(JSON.stringify({phase: 'selection', firstGroup, lastGroup: tests.length, renderedGroups: selected.length, pureGroups: runPure ? 1 : 0}));
   if (runPure) console.log(JSON.stringify(pureChecks()));
-  const artifactRoot = '/srv/catchplate-fast/projects/catchplate-operator-artifacts'; assert((await stat(artifactRoot)).isDirectory());
-  artifacts = await mkdtemp(join(artifactRoot, 'google-connect-synthetic-')); console.log(JSON.stringify({artifactDirectory: artifacts}));
+  artifacts = await mkdtemp(join(tmpdir(), 'catchplate-google-connect-')); console.log(JSON.stringify({artifactDirectory: artifacts}));
   const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');
   const browser = await chromium.launch({headless: true, args: ['--no-sandbox', '--disable-background-networking']}); let deadline;
   try {

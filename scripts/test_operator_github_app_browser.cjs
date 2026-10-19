@@ -210,6 +210,8 @@ async function fixedRepository(page) {
 }
 async function copyRecipe(page) {
   activeStep = 'copy-sdk'; await page.waitForFunction(() => !document.querySelector('#copy-command').disabled);
+  if (!await page.locator('#client-advanced-template').evaluate(node => node.open))
+    await page.locator('#client-advanced-template > summary').click();
   await page.locator('#github-proxy-ca-path').fill('./outer-proxy.pem');
   const text = await page.locator('#client-command').innerText();
   for (const literal of ['@octokit/rest@22.0.1', 'undici@8.11.2', 'process.env.CATCHPLATE_PROXY_TOKEN',

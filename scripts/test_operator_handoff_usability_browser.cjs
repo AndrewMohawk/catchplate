@@ -29,6 +29,45 @@ async function run(browser) {
     const path = join(directory, name + '.png');
     await page.screenshot({path, fullPage: false}); return path;
   }
+  await fixture(browser, {credentials: [], applications: [], rules: []}, async (page, state) => {
+    await ready(page); await view(page, 'proxy');
+    assert.equal(await page.locator('#proxy-rule option:checked').innerText(), 'Choose a client first');
+    assert.match(await status(page).innerText(), /Choose a client and a saved permission/);
+    assert(await page.locator('#client-config-fields').isHidden());
+    assert(await page.locator('#client-config-examples').isHidden());
+    assert(await page.locator('#download-config').isHidden());
+    assert(await page.locator('#ca-download').isVisible(), 'public CA remains available before client setup');
+    assert.equal(await page.locator('#ca-download').getAttribute('href'), '/ca.pem');
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({width, height: 960}); await page.evaluate(() => scrollTo(0, 0));
+      results.push({case: 'empty-client-guidance', width, screenshot: await screenshot(page, 'empty-' + width)});
+    }
+    await page.locator('#client-connection-details > summary').click();
+    assert(await page.locator('#proxy-url').isVisible(), 'proxy endpoint remains accessible before setup');
+    await page.locator('#client-config-next').click();
+    await page.locator('#connect-method-choice').waitFor({state: 'visible'});
+    assert.deepEqual(state.posts, [], 'starting setup is navigation, not client creation');
+  });
+  await fixture(browser, {credentials: [credential()], applications: [application(), application({id: IDS.other, name: 'Unassigned job'})], rules: []}, async (page, state) => {
+    await ready(page); await view(page, 'proxy');
+    await page.locator('#proxy-application').selectOption(IDS.other);
+    assert.match(await status(page).innerText(), /no saved permission/);
+    assert(await page.locator('#client-config-fields').isHidden());
+    assert.equal(await page.locator('#client-config-next').innerText(), 'Add a permission for Unassigned job');
+    await page.locator('#client-config-next').focus(); await page.keyboard.press('Enter');
+    await page.locator('#connect').waitFor({state: 'visible'});
+    assert.equal(await page.locator('#connect-application-choice').inputValue(), IDS.other);
+    assert.deepEqual(state.posts, [], 'exact-client continuation creates no access');
+    await view(page, 'proxy');
+    state.cancelNextDialog = true; await page.locator('#client-config-next').click();
+    assert.equal(new URL(page.url()).hash, '#proxy', 'cancelling replacement keeps the existing setup draft and current view');
+    assert.match(state.dialogs.at(-1), /Replace the current setup draft/);
+    state.applications[1].token_status = 'expired'; state.applications[1].token_expires_at_epoch_ms = NOW - 1;
+    await refresh(page, state, /token is expired/);
+    assert.equal(await page.locator('#client-config-next').getAttribute('href'), '#applications', 'expired unassigned client needs lifecycle review first');
+    assert.deepEqual(state.posts, []);
+    results.push({case: 'unassigned-exact-client-next-step-and-expiry', passed: true});
+  });
   const second = github.githubRule('github_issues_read_v1', {id: '00000000-0000-4000-8000-000000000099',
     name: 'Another repository', repository: {owner: 'Example-Owner', name: 'Second.Repo'},
     upstream_url: 'https://api.github.com/repos/Example-Owner/Second.Repo/issues'});
@@ -150,6 +189,9 @@ async function run(browser) {
     await page.locator('#load-error').waitFor({state: 'visible'});
     assert.match(await status(page).innerText(), /refresh workspace status to confirm/);
     assert(await page.locator('#download-config').isDisabled());
+    assert(await page.locator('#client-config-fields').isHidden(), 'unavailable state removes stale example controls');
+    assert(await page.locator('#client-config-next').isHidden());
+    assert(await page.locator('#ca-download').isVisible());
     assert.deepEqual(state.posts, []);
     results.push({case: 'unavailable-saved-state', passed: true});
   });

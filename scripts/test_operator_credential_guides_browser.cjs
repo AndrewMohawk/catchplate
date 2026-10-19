@@ -43,6 +43,12 @@ async function guide(page, containerId, provider, {links = true} = {}) {
   await container.waitFor({state: 'visible'});
   assert.equal(await container.getAttribute('data-provider'), provider, 'guide identifies the selected provider');
   assert((await container.locator('h2,h3,h4,[role="heading"]').innerText()).trim().length > 0, 'guide has a readable title');
+  const disclosure = container.locator(':scope > details');
+  if (await disclosure.count()) {
+    assert.equal(await disclosure.evaluate(node => node.open), false, 'long acquisition help starts compact');
+    await disclosure.locator('summary').focus(); await page.keyboard.press('Enter');
+    assert.equal(await disclosure.evaluate(node => node.open), true, 'acquisition instructions remain keyboard accessible');
+  }
   const steps = await container.locator('ol > li').allInnerTexts();
   assert(steps.length >= 2 && steps.length <= 4 && steps.every(step => step.trim().length > 10), 'ordered actionable instructions');
   const anchors = await container.locator('a').evaluateAll(items => items.map(item => ({

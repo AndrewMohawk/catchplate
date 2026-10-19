@@ -315,7 +315,35 @@ user-agent</textarea><p class="small muted">Provider authentication and JSON Con
     <section id="applications" class="page" aria-labelledby="applications-title" hidden>
       <h1 id="applications-title">Clients</h1><p class="intro">Scripts, agents and CI jobs that use the proxy. Each client has its own expiring proxy token, not a provider secret. <a href="#connect">Set up access</a> to select a credential and grant permissions; creating an identity alone grants no access.</p>
 <p id="application-proxy-default" class="small muted"></p>
-<form id="application-form" class="card" autocomplete="off"><fieldset id="application-fields" disabled><label for="application-name">Client name</label><input id="application-name" maxlength="128" placeholder="My reporting script" required><label for="application-token-ttl">Client token lifetime</label><select id="application-token-ttl"><option value="3600">1 hour</option><option value="86400">1 day</option><option value="604800">7 days</option><option value="2592000" selected>30 days</option><option value="7776000">90 days</option></select><p class="small muted">Expires automatically. Use manual token rotation unless you explicitly enroll a workload key below. No unlimited tokens; creating a client without permissions grants no access.</p><button id="application-create" type="submit">Create client &amp; token</button></fieldset><p id="application-form-status" role="status" aria-live="polite"></p></form><article id="one-time-access" class="card token-card" hidden><h2>Client proxy token</h2><p id="token-application-label"></p><p>This token is shown once. It cannot be retrieved after reloading or dismissing it.</p><div class="input-action"><label for="client-token">Client token</label><input id="client-token" type="password" readonly disabled autocomplete="off" spellcheck="false"><button id="reveal-token" type="button" class="secondary" aria-pressed="false" disabled>Reveal</button></div><div class="actions"><button id="copy-token" class="secondary" disabled>Copy token</button><a id="token-add-permission" class="button" href="#connect">Set up access for this client →</a><a class="button secondary" href="#proxy">Proxy setup</a><button id="dismiss-token" class="secondary" disabled>I've saved it; clear token</button></div><p id="token-status" role="status" aria-live="polite"></p></article><p id="token-expiry-status" role="status" aria-live="polite"></p><div class="heading"><h2>Saved clients</h2><button id="applications-refresh" class="secondary">Refresh</button></div><p id="application-action-status" role="status" aria-live="polite"></p><div id="applications-list" class="stack"></div>
+<form id="application-form" class="card" autocomplete="off">
+  <fieldset id="application-fields" disabled>
+    <label for="application-name">Client name</label><input id="application-name" maxlength="128" placeholder="My reporting script" required>
+    <label for="application-token-ttl">Client token lifetime</label>
+    <select id="application-token-ttl"><option value="3600">1 hour</option><option value="86400">1 day</option><option value="604800">7 days</option><option value="2592000" selected>30 days</option><option value="7776000">90 days</option></select>
+    <p class="small muted">Expires automatically. Use manual token rotation unless you explicitly enroll a workload key below. No unlimited tokens; creating a client without permissions grants no access.</p>
+    <button id="application-create" type="submit">Create client &amp; token</button>
+  </fieldset>
+  <p id="application-form-status" role="status" aria-live="polite"></p>
+</form>
+<article id="one-time-access" class="card token-card" aria-labelledby="token-receipt-title" hidden>
+  <h2 id="token-receipt-title">Save this client's access</h2>
+  <p id="token-application-label"></p>
+  <p id="token-next-step-description"></p>
+  <p>This token is shown once. It cannot be retrieved after reloading or dismissing it.</p>
+  <div class="input-action">
+    <label for="client-token">Client token</label><input id="client-token" type="password" readonly disabled autocomplete="off" spellcheck="false">
+    <button id="reveal-token" type="button" class="secondary" aria-pressed="false" disabled>Reveal</button>
+  </div>
+  <div class="actions">
+    <a id="token-add-permission" class="button" href="#connect">Set up access for this client →</a>
+    <button id="copy-token" class="secondary" disabled>Copy token</button>
+    <button id="dismiss-token" class="secondary" disabled>I've saved it; clear token</button>
+  </div>
+  <p id="token-status" role="status" aria-live="polite"></p>
+</article>
+<p id="token-expiry-status" role="status" aria-live="polite"></p>
+<div class="heading"><h2>Saved clients</h2><button id="applications-refresh" class="secondary">Refresh</button></div>
+<p id="application-action-status" role="status" aria-live="polite"></p><div id="applications-list" class="stack"></div>
 <details id="application-renewal" class="card" aria-labelledby="application-renewal-title">
   <summary id="application-renewal-title">Automatic token renewal for a workload (optional)</summary>
   <p>Let one script, agent or CI job renew its own short-lived proxy token for a limited period. It cannot extend its enrollment, change permissions or rotate provider credentials. Use a separate client for each independent workload.</p>

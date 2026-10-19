@@ -5,7 +5,8 @@
 const assert = require('node:assert/strict');
 const {createHash} = require('node:crypto');
 const {readFileSync} = require('node:fs');
-const {readFile, mkdtemp, stat} = require('node:fs/promises');
+const {readFile, mkdtemp} = require('node:fs/promises');
+const {tmpdir} = require('node:os');
 const {join, resolve} = require('node:path');
 const {runInNewContext} = require('node:vm');
 const {fixture: baseFixture, ready, view, credential, application, rule, IDS, NOW} = require('./test_operator_catalog_browser.cjs');
@@ -51,7 +52,7 @@ const secret = page => page.locator('#credential-replace-secret');
 const INPUTS = ['scripts/test_operator_key_replacement_browser.cjs', 'scripts/test_operator_catalog_browser.cjs',
   'scripts/test_operator_ordinary_modes_browser.cjs', 'catchplate/operator_demo_portal.py',
   ...['index.html', 'style.css', 'app.js', 'workspace_core.js', 'workspace_github.js', 'workspace_resources.js', 'workspace_applications.js',
-    'workspace_proxy_audit.js', 'workspace_connect.js', 'workspace_google.js'].map(name => 'catchplate/operator_demo_web/' + name)];
+    'workspace_proxy_audit.js', 'workspace_connect.js', 'workspace_google.js', 'workspace_ecr.js'].map(name => 'catchplate/operator_demo_web/' + name)];
 let artifacts;
 async function hashes() { return Object.fromEntries(await Promise.all(INPUTS.map(async name =>
   [name, createHash('sha256').update(await readFile(join(ROOT, name))).digest('hex')]))); }
@@ -167,12 +168,14 @@ async function uncertain(page, freshRequired = false) {
   else await page.waitForFunction(() => !document.querySelector('#mutation-review-confirm').disabled);
   assert(!await panel(page).isVisible()); assert.equal(await secret(page).inputValue(), '');
   assert.match(await page.locator('#mutation-review-text').innerText(), /no automatic retry/i);
-  assert(await replaceAction(page).isDisabled()); assert(await page.locator('#credential-add').isDisabled());
+  const replace = replaceAction(page);
+  assert(await replace.count() === 0 || await replace.isDisabled(), 'unavailable state must not retain an actionable key replacement');
+  assert(await page.locator('#credential-add').isDisabled());
   assert(await page.locator('#application-create').isDisabled()); assert(await page.locator('#rule-save').isDisabled()); await noSecret(page);
 }
 
 function projectionChecks() {
-  const source = ['workspace_core.js', 'workspace_github.js']
+  const source = ['workspace_core.js', 'workspace_github.js', 'workspace_ecr.js']
     .map(name => readFileSync(join(ROOT, 'catchplate/operator_demo_web', name), 'utf8')).join('\n');
   const {clientCredentialInput, credentialHeaderTarget} = require('../catchplate/operator_demo_web/app.js');
   const projected = (capability, target = staticKey()) => {
@@ -362,16 +365,15 @@ const tests = [
     });
     for (const catalogStatus of [401, 403]) await fixture(browser, {}, async (page, state) => {
       await open(page); await secret(page).fill(KEY); state.catalogStatus = catalogStatus;
-      // Authorization loss disables retained cards rather than replacing them,
-      // so await the exact response and terminal error instead of the success
-      // helper's resource-list MutationObserver.
+      // Await the exact failed response and terminal error; unavailable catalog
+      // state removes stale cards and cannot leave an actionable replacement.
       const response = page.waitForResponse(value => value.url() === CATALOG && value.request().method() === 'GET');
       await page.locator('#credentials-refresh').click(); const result = await response;
       assert.equal(result.status(), catalogStatus); await result.finished(); await page.locator('#load-error').waitFor({state: 'visible'});
       assert.equal(await page.locator('#load-error-text').innerText(), 'Your session or request origin could not be verified. Reload and sign in again.');
       assert(!await panel(page).isVisible()); assert.equal(await secret(page).inputValue(), '');
       for (const id of ['credential-add', 'application-create', 'rule-save', 'mutation-review-confirm']) assert(await page.locator('#' + id).isDisabled());
-      assert(await replaceAction(page).isDisabled()); await noSecret(page);
+      assert.equal(await replaceAction(page).count(), 0); await noSecret(page);
       await page.clock.runFor(6000); assert.equal(state.replacements.length, 0); assert.equal(state.replacementRequests.length, 0);
       assert.equal(state.posts.length, 0); assert.equal(state.credentials[0].credential_generation, 7);
     });
@@ -430,15 +432,16 @@ const tests = [
 
 async function main() {
   const args = process.argv.slice(2); const layoutOnly = args.length === 1 && args[0] === '--layout-only';
-  assert(args.length === 0 || layoutOnly, 'usage: test_operator_key_replacement_browser.cjs [--layout-only]; no live target or token accepted');
+  const from = args.length === 0 || layoutOnly ? 1 : args.length === 2 && args[0] === '--from-group' ? Number(args[1]) : NaN;
+  assert(Number.isSafeInteger(from) && from >= 1 && from <= tests.length,
+    'usage: test_operator_key_replacement_browser.cjs [--layout-only | --from-group N]; no live target or token accepted');
   assert.equal(tests.length, 14, 'focused rendered group count stays exact');
-  const selected = layoutOnly ? [layoutTest] : tests;
+  const selected = layoutOnly ? [layoutTest] : tests.slice(from - 1);
   const before = await hashes(); console.log(JSON.stringify({phase: 'source-before', hashes: before}));
   console.log(JSON.stringify({phase: 'selection', groups: selected.length, totalGroups: tests.length,
-    layoutOnly, projectionGroups: layoutOnly ? 0 : 1, names: selected.map(([name]) => name)}));
+    layoutOnly, firstGroup: from, projectionGroups: layoutOnly ? 0 : 1, names: selected.map(([name]) => name)}));
   if (!layoutOnly) console.log(JSON.stringify(projectionChecks()));
-  const artifactRoot = '/srv/catchplate-fast/projects/catchplate-operator-artifacts';
-  assert((await stat(artifactRoot)).isDirectory()); artifacts = await mkdtemp(join(artifactRoot, 'key-replacement-browser-synthetic-'));
+  artifacts = await mkdtemp(join(tmpdir(), 'catchplate-key-replacement-browser-'));
   console.log(JSON.stringify({artifactDirectory: artifacts, scope: 'synthetic replacement review screenshots only; password fields masked'}));
   const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');
   const browser = await chromium.launch({headless: true, args: ['--no-sandbox', '--disable-background-networking']}); let deadline;

@@ -59,6 +59,17 @@ function createApplicationsView(workspace, actions = {}) {
       clear('The held token was cleared because its current generation, expiry or application state could not be confirmed. No token has been renewed or retrieved.');
   }
   function tokenFor(id) { reconcile(); return held?.id === id ? held.token : ''; }
+  function continuation() {
+    reconcile();
+    const application = workspace.state.catalog?.applications.find(item => item.id === held?.id);
+    return {application, configure: Boolean(application?.active_rule_count)};
+  }
+  function focusResult(statusId, applicationId) {
+    if (location.hash !== '#applications') return;
+    reconcile();
+    const target = element(held && held.id === applicationId ? 'one-time-access' : statusId);
+    target.setAttribute('tabindex', '-1'); target.focus(); target.scrollIntoView({block: 'start'});
+  }
   function scheduleExpiry() {
     clearTimeout(expiryTimer);
     if (held) expiryTimer = setTimeout(() => { reconcile(); scheduleExpiry(); workspace.emit(); }, Math.max(1, Math.min(held.expires - Date.now(), 2147483647)));
@@ -100,7 +111,12 @@ function createApplicationsView(workspace, actions = {}) {
   form.addEventListener('submit', async event => {
     event.preventDefault(); if (!workspace.ready('applications') || !form.reportValidity()) return;
     const lifetime = Number(element('application-token-ttl').value); if (!validLifetime(lifetime)) return;
-    await create(element('application-name').value.trim(), lifetime, 'application-form-status');
+    const receipt = await create(element('application-name').value.trim(), lifetime, 'application-form-status');
+    if (receipt) {
+      if (!workspace.state.uncertain && tokenFor(receipt.id))
+        element('application-form-status').textContent = 'Client created. Save its one-time access and add a permission before use.';
+      focusResult('application-form-status', receipt.id);
+    }
   });
   async function copyHeld() {
     reconcile(); if (!held) return;
@@ -117,8 +133,10 @@ function createApplicationsView(workspace, actions = {}) {
     if (held && window.confirm('Clear the one-time token from this page? It cannot be retrieved again.')) { clear(); workspace.emit(); }
   });
   element('token-add-permission').addEventListener('click', event => {
-    event.preventDefault(); reconcile();
-    if (!held || workspace.state.busy || workspace.state.uncertain || !actions.addPermission?.(held.id))
+    event.preventDefault();
+    const next = continuation();
+    const action = next.configure ? actions.configure : actions.addPermission;
+    if (!held || !next.application || workspace.state.busy || workspace.state.uncertain || !action?.(held.id))
       element('token-status').textContent = 'Client setup could not be opened. Keep any current setup draft, resolve pending changes and refresh saved state before continuing. No permission was granted.';
   });
   function loginIdentity(application) {
@@ -186,8 +204,14 @@ function createApplicationsView(workspace, actions = {}) {
   }
   function render() {
     reconcile(); const catalog = workspace.state.catalog;
+    const next = continuation();
+    element('token-add-permission').textContent = next.configure ? 'Download client configuration →' : 'Set up access for this client →';
+    element('token-add-permission').setAttribute('href', next.configure ? '#proxy' : '#connect');
+    element('token-next-step-description').textContent = next.configure ?
+      'Your saved permissions stay in place. Download a new private configuration for this client, then update its workload. You do not need to add permissions again.' :
+      'This client has no permissions yet. Set up access using a saved credential, then download its private configuration.';
     element('token-add-permission').setAttribute('aria-disabled', String(!held || workspace.state.busy ||
-      workspace.state.uncertain || typeof actions.addPermission !== 'function'));
+      workspace.state.uncertain || typeof (next.configure ? actions.configure : actions.addPermission) !== 'function'));
     element('application-fields').disabled = !workspace.ready('applications');
     element('application-proxy-default').textContent = newApplicationProxyAuthentication(catalog).proxy_authentication ?
       'New apps use standard proxy login: public application ID as username, application token as password. Bearer also remains supported. Never use the provider key.' :
@@ -241,11 +265,22 @@ function createApplicationsView(workspace, actions = {}) {
           const lifetime = Number(select.value); if (!validLifetime(lifetime)) return;
           if (held && held.id !== application.id && !window.confirm('Rotating this application clears the other held one-time token from this page. Have you saved it?')) return;
           if (!window.confirm(`Replace the client token for "${application.name}" (${application.id}) with a token valid for ${select.selectedOptions[0].textContent}? This cancels any workload renewal enrollment and previous-token overlap. The previous token stops working after the proxy loads the new policy. Save the replacement immediately. This does not refresh a provider OAuth credential.`)) return;
-          invalidate(application.id); await workspace.mutate('applications/rotate-token', {id: application.id, token_lifetime_seconds: lifetime}, 'application-action-status', hold);
+          invalidate(application.id);
+          const accepted = await workspace.mutate('applications/rotate-token', {id: application.id, token_lifetime_seconds: lifetime}, 'application-action-status', hold);
+          if (accepted && !workspace.state.uncertain && tokenFor(application.id))
+            element('application-action-status').textContent = 'Replacement token saved. Save the new client configuration. ' +
+              (workspace.loaded() ? 'The saved policy is loaded; no client request was tested.' : 'Waiting for the exact saved policy to load before use.');
+          focusResult('application-action-status', application.id);
         });
         revoke.addEventListener('click', async () => {
           if (!window.confirm(`Revoke client "${application.name}" (${application.id}) and its ${application.active_rule_count} active permissions? This also cancels workload renewal and previous-token overlap. Shared provider credentials and other clients remain. Enforcement begins after the proxy loads the new policy; already-dispatched requests cannot be recalled.`)) return;
-          invalidate(application.id); await workspace.mutate('applications/revoke', {id: application.id}, 'application-action-status');
+          invalidate(application.id);
+          const accepted = await workspace.mutate('applications/revoke', {id: application.id}, 'application-action-status');
+          if (accepted && !workspace.state.uncertain)
+            element('application-action-status').textContent = 'Client revoked. ' +
+              (workspace.loaded() ? 'The revocation policy is loaded.' : 'Waiting for the exact saved policy to load before revocation is enforced.') +
+              ' Shared provider credentials and other clients remain. Already-dispatched requests cannot be recalled.';
+          focusResult('application-action-status');
         });
         card.append(textNode('p', 'Replacement token lifetime', 'small'), select); const tokenActions = textNode('div', undefined, 'actions'); tokenActions.append(rotate, revoke);
         if (login && projectApplicationProxyAuthenticationCapability(catalog.capabilities.application_proxy_authentication)) {

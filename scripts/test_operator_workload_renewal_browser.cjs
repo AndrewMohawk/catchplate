@@ -92,6 +92,8 @@ async function fixture(browser, options, exercise) {
   });
 }
 async function select(page) {
+  const panel = page.locator('#application-renewal');
+  if (!await panel.evaluate(node => node.open)) await panel.locator(':scope > summary').click();
   await page.locator('#application-renewal-client').selectOption(IDS.application);
   assert.equal(await page.locator('#application-renewal-client').inputValue(), IDS.application);
 }

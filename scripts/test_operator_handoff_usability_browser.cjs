@@ -71,6 +71,58 @@ async function run(browser) {
   const second = github.githubRule('github_issues_read_v1', {id: '00000000-0000-4000-8000-000000000099',
     name: 'Another repository', repository: {owner: 'Example-Owner', name: 'Second.Repo'},
     upstream_url: 'https://api.github.com/repos/Example-Owner/Second.Repo/issues'});
+  for (const width of [1280, 390]) {
+    const existingRules = [rule(), rule({id: '55555555-5555-4555-8555-555555555555', application_id: IDS.other,
+      route_id: 'operator.55555555-5555-4555-8555-555555555555'}),
+    rule({id: '66666666-6666-4666-8666-666666666666', name: 'Second saved operation', application_id: IDS.other,
+      route_id: 'operator.66666666-6666-4666-8666-666666666666', upstream_url: 'https://api.example.test/v1/other'})];
+    await fixture(browser, {credentials: [credential()], applications: [application(), application({id: IDS.other,
+      name: 'Expired reporting client', token_expires_at_epoch_ms: NOW - 1, token_status: 'expired'})],
+    rules: existingRules, autoLoad: false}, async (page, state) => {
+      await page.setViewportSize({width, height: 960}); await ready(page); await view(page, 'applications');
+      const rotate = page.locator('#applications-list [data-resource-id="' + IDS.other + '"] [data-action="rotate-application"]');
+      state.cancelNextDialog = true; await rotate.click();
+      assert.deepEqual(state.posts, [], 'cancelled replacement does not send a request');
+      await rotate.focus(); await page.keyboard.press('Enter');
+      await page.locator('#one-time-access').waitFor({state: 'visible'}); await ready(page);
+      await page.waitForFunction(() => document.activeElement.id === 'one-time-access');
+      assert.match(await page.locator('#application-action-status').innerText(), /^Replacement token saved\..*Waiting for the exact saved policy/);
+      const bounds = await page.locator('#one-time-access').boundingBox();
+      assert(bounds.y >= 0 && bounds.y < 300, 'replacement receipt is brought into the viewport');
+      const held = await page.locator('#client-token').inputValue();
+      assert(held.includes(IDS.other.replaceAll('-', '')) && held.endsWith('_generation_2'));
+      assert.equal(await page.locator('#client-token').getAttribute('type'), 'password');
+      assert.equal(await page.locator('#token-add-permission').innerText(), 'Download client configuration →');
+      assert.equal(await page.locator('#token-add-permission').getAttribute('href'), '#proxy');
+      assert.match(await page.locator('#token-next-step-description').innerText(), /do not need to add permissions again/);
+      results.push({case: 'rotated-client-receipt', width, screenshot: await screenshot(page, 'rotated-' + width)});
+      await page.locator('#token-add-permission').focus(); await page.keyboard.press('Enter');
+      await page.locator('#proxy').waitFor({state: 'visible'});
+      assert.equal(await page.locator('#proxy-application').inputValue(), IDS.other, 'rotation handoff selects the held client, not the first saved client');
+      assert.equal(await page.locator('#proxy-rule').inputValue(), '', 'multiple saved permissions still need an explicit choice');
+      await page.locator('#proxy-rule').selectOption(existingRules[2].id);
+      assert(await page.locator('#download-config').isDisabled(), 'pending policy is not bypassed by the shortcut');
+      assert.match(await status(page).innerText(), /exact saved permission is loaded/);
+      state.loaded = state.active; await refresh(page, state, /^Ready to download/);
+      assert(!(await page.locator('#download-config').isDisabled()));
+      assert.equal(await page.locator('#client-token').inputValue(), held);
+      assert.equal(state.rules.length, existingRules.length);
+      assert(state.rules.every(item => item.status === 'active'), 'existing permissions are retained');
+      assert.deepEqual(state.posts.map(item => item.name), ['applications/rotate-token']);
+      await view(page, 'applications');
+      await page.locator('#applications-list [data-resource-id="' + IDS.other + '"] [data-action="revoke-application"]').click();
+      await ready(page); await page.waitForFunction(() => document.activeElement.id === 'application-action-status');
+      assert.match(await page.locator('#application-action-status').innerText(), /^Client revoked\..*before revocation is enforced/);
+      assert(await page.locator('#one-time-access').isHidden());
+      assert.equal(await page.locator('#client-token').inputValue(), '');
+      assert.equal(state.credentials[0].status, 'active');
+      assert.equal(state.applications[0].status, 'active');
+      assert.equal(state.rules[0].status, 'active');
+      assert(state.rules.filter(item => item.application_id === IDS.other).every(item => item.status === 'revoked'));
+      assert.deepEqual(state.posts.map(item => item.name), ['applications/rotate-token', 'applications/revoke']);
+      results.push({case: 'exact-client-rotation-policy-and-revocation', width, passed: true});
+    });
+  }
   await github.fixture(browser, {rules: [github.githubRule(), second]}, async (page, state, observed) => {
     await ready(page); await view(page, 'applications');
     await page.getByRole('button', {name: 'Configure client', exact: true}).click();
@@ -152,6 +204,8 @@ async function run(browser) {
     await ready(page); await view(page, 'applications');
     await page.locator('[data-action="rotate-application"]').click();
     await page.locator('#mutation-review').waitFor({state: 'visible'});
+    await page.waitForFunction(() => document.activeElement.id === 'application-action-status');
+    assert(await page.locator('#one-time-access').isHidden(), 'lost rotation reply never invents a token receipt');
     await view(page, 'proxy');
     assert.match(await status(page).innerText(), /review the uncertain change/);
     assert(await page.locator('#download-config').isDisabled());

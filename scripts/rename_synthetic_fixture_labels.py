@@ -189,6 +189,13 @@ def main():
         for name in (".catchplate-operator-demo.json", ".operator-publication.lock", "catchplate.sqlite3", "policy-bundle.json"):
             info = (root / name).lstat()
             need(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid())
+        managed = os.getenv("CATCHPLATE_OPERATOR_MANAGED_GOOGLE_ENABLED", "0")
+        need(managed in {"0", "1"})
+        if managed == "1":
+            # Same cold read-only admission as the normal runner, before config
+            # import. Do not manufacture flags, initialize custody or activate it.
+            from catchplate import operator_google_managed_config
+            operator_google_managed_config.bootstrap()
         from catchplate import operator_demo
         operator_demo.activate()
         if args.capture:

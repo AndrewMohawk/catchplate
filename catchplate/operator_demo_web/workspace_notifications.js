@@ -374,6 +374,7 @@ function createNotificationsView(workspace) {
     const fields = textNode('fieldset'); fields.id = editorId; fields.dataset.notificationFields = ''; fields.hidden = true; form.append(fields);
     const legend = textNode('legend', slot.channel === 'action_required' ? 'Action alert destination' : 'Audit log destination'); fields.append(legend);
     const label = field(form, fields, 'label', 'Destination label'); label.maxLength = 80; label.required = true; label.value = slot.label;
+    label.placeholder = slot.channel === 'action_required' ? 'Team approval alerts' : 'Team activity log';
     const enabledLabel = textNode('label'); const enabled = textNode('input'); enabled.type = 'checkbox'; enabled.name = 'enabled'; enabled.checked = slot.enabled;
     enabledLabel.append(enabled, document.createTextNode(' Enabled for selected events')); fields.append(enabledLabel);
     const action = field(form, fields, 'url_action', 'Destination URL', 'select');
@@ -385,6 +386,7 @@ function createNotificationsView(workspace) {
     if (slot.revision === 0) { action.hidden = true; action.previousElementSibling.hidden = true; }
     const group = textNode('div'); group.dataset.notificationUrlGroup = ''; fields.append(group);
     const url = field(form, group, 'url', 'Webhook URL'); url.type = 'password'; url.maxLength = 4096; url.autocomplete = 'new-password'; url.spellcheck = false;
+    url.placeholder = slot.adapter === 'slack' ? 'https://hooks.slack.com/services/…' : 'https://your-service.example/webhooks/…';
     group.append(textNode('p', 'Write-only HTTPS destination. Never paste it into an application permission. Cleared on submission and when leaving this page.', 'small muted'));
     const eventStatus = textNode('p'); eventStatus.dataset.notificationEventsStatus = ''; eventStatus.setAttribute('aria-live', 'polite'); fields.append(eventStatus);
     if (slot.channel === 'audit_log') {
@@ -428,7 +430,7 @@ function createNotificationsView(workspace) {
   }
   function render() {
     nativeObservation?.stop(); nativeObservation = null;
-    clearSecrets(); forms.clear(); element('notifications-panels').replaceChildren();
+    clearSecrets(); forms.clear(); element('notifications-panels').replaceChildren(); element('notifications-native-status').replaceChildren();
     element('notifications-worker').textContent = !status ? 'Worker status unavailable.' :
       {disabled: 'Delivery worker disabled.', running: 'Delivery worker running; this is not delivery confirmation.',
         not_started: 'Delivery worker has not started. Saved settings alone cannot deliver messages.', unavailable: 'Delivery worker unavailable. Inspect deployment health before testing.'}[status.worker.state] +
@@ -437,10 +439,30 @@ function createNotificationsView(workspace) {
       'Delivery history: ' + notificationStates.map(state => state.replace('_', ' ') + ' ' + status.queue[state]).join(' · ') +
       '. Pending source events: ' + status.backlog.pending_source_events + '. Queue limit: ' + status.backlog.queue_capacity +
       '; retained delivery limit: ' + status.backlog.retained_capacity + '.' : '';
+    const health = element('notifications-health-summary');
+    const issues = status?.available && (status.worker.state !== 'running' || status.queue.failed ||
+      status.queue.outcome_unknown || status.backlog.pending_source_events);
+    health.hidden = !issues;
+    health.replaceChildren();
+    if (issues) {
+      health.append(document.createTextNode(status.worker.state !== 'running' ?
+        'Delivery is not ready: the worker is ' + status.worker.state.replace('_', ' ') + '. ' :
+        'Recorded delivery issues: ' + status.queue.failed + ' failed, ' + status.queue.outcome_unknown +
+        ' unknown outcomes, ' + status.backlog.pending_source_events + ' source events waiting. '));
+      const inspect = textNode('button', 'Review delivery health', 'secondary'); inspect.type = 'button';
+      inspect.addEventListener('click', () => {
+        const details = element('notifications-delivery-details'); details.open = true;
+        details.querySelector('summary').focus(); details.scrollIntoView({block: 'start'});
+      }); health.append(inspect);
+    }
     if (status?.available) {
-      const jump = textNode('nav', undefined, 'actions'); jump.setAttribute('aria-label', 'Notification types');
+      const jump = textNode('nav', undefined, 'notification-choices'); jump.setAttribute('aria-label', 'Notification types');
       for (const [channel, title] of [['action_required', 'Action alerts'], ['audit_log', 'Audit logs']]) {
-        const button = textNode('button', title, 'secondary'); button.type = 'button'; button.dataset.notificationJump = channel;
+        const enabled = status.slots.filter(slot => slot.channel === channel && slot.enabled && slot.secret_present && slot.event_types.length).length;
+        const button = textNode('button', undefined, 'secondary purpose-choice'); button.type = 'button'; button.dataset.notificationJump = channel;
+        button.append(textNode('span', title), textNode('span', channel === 'action_required' ?
+          'Someone needs to make a decision' : 'A record of what happened', 'small'),
+          textNode('span', enabled + ' of 2 destinations enabled', 'small'));
         button.addEventListener('click', () => {
           const heading = element('notification-channel-' + channel);
           heading?.scrollIntoView({block: 'start'}); heading?.focus({preventScroll: true});
@@ -453,9 +475,9 @@ function createNotificationsView(workspace) {
         const heading = textNode('h2', title); heading.id = 'notification-channel-' + channel; heading.tabIndex = -1;
         section.setAttribute('aria-labelledby', heading.id);
         section.append(heading, textNode('p', channel === 'action_required' ? status.capabilities.action_required.source_available ?
-          'Action-required delivery has source support. Native availability below describes only the last source read, not current gesture readiness.' :
-          'Action-required source is not available according to the last recorded status. You may configure destinations and send a synthetic test, but a test does not establish native readiness.' :
-          'Delivers safe summaries of newly committed selected audit events. This is not a verified audit archive or an application webhook.'));
+          'Notify a reviewer when a supported action needs attention. They must sign in to review it; delivery is not approval.' :
+          'The action source is unavailable in the last status check. You can configure a destination and send a synthetic test, but that does not enable action alerts or establish hardware readiness.' :
+          'Send summaries of selected events to your activity log. This is separate from action alerts and is not a verified audit archive.'));
         const cards = textNode('div', undefined, 'two-column');
         for (const slot of status.slots.filter(item => item.channel === channel)) cards.append(renderSlot(slot));
         section.append(cards);
@@ -465,7 +487,7 @@ function createNotificationsView(workspace) {
         }
         element('notifications-panels').append(section);
       }
-      if (nativeObservation) { nativeObservation.panel.classList.add('card'); element('notifications-panels').append(nativeObservation.panel); }
+      if (nativeObservation) { nativeObservation.panel.classList.add('card'); element('notifications-native-status').append(nativeObservation.panel); }
     }
     operationMessage(); controls();
   }

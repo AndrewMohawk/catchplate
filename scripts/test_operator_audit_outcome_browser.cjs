@@ -49,7 +49,13 @@ async function fixture(browser, items, exercise, options = {}) {
       await page.waitForFunction(values => document.getElementById('audit-status').textContent === values.length + ' events shown. End of matching history.' &&
         JSON.stringify([...document.querySelectorAll('#audit-list pre')].map(node => JSON.parse(node.textContent))) === JSON.stringify(values), expected);
       assert.deepEqual(await page.locator('#audit-list pre').evaluateAll(nodes => nodes.map(node => JSON.parse(node.textContent))), expected);
-      assert.equal(await page.locator('#audit-list img, #audit-list script, #audit-list button, #audit-list a').count(), 0);
+      assert.equal(await page.locator('#audit-list img, #audit-list script, #audit-list button').count(), 0);
+      for (const link of await page.locator('#audit-list a').all()) {
+        const href = await link.getAttribute('href');
+        assert(href === '#pending-actions' && await link.getAttribute('data-audit-pending-link') !== null ||
+          href === '#overview' && await link.locator('..').innerText() === 'Historical event. Check the current policy on Overview',
+          'only fixed local review and current-policy links are allowed');
+      }
       assert.equal(await page.evaluate(() => globalThis.auditInjected), undefined);
     }
     await ready(page);
@@ -100,7 +106,10 @@ const tests = [
     await fixture(browser, items, async page => {
       assert.deepEqual(await page.locator('#audit-list h3').allTextContents(), ['Policy refresh failed', 'Credential saved',
         'Client revoked', 'Permission saved', 'Credential revoked locally', 'Recorded event']);
+      assert(await card(page, 0).getByRole('link', {name: 'Check the current policy on Overview'}).isVisible());
+      await card(page, 0).locator('summary').click();
       assert.match(await card(page, 0).locator('[data-audit-reason]').innerText(), /historical event does not establish a current outage/);
+      await card(page, 0).locator('summary').click();
       assert.equal(await card(page, 0).locator('[data-audit-summary]').count(), 0);
       assert.equal(await card(page, 1).locator('[data-audit-summary]').innerText(), 'Credential: ' + savedCredential.name);
       assert.equal(await card(page, 2).locator('[data-audit-summary]').innerText(), 'Client: ' + client.name);
@@ -127,7 +136,7 @@ const tests = [
     }
     await card(page, 0).locator('summary').click();
     assert.equal(JSON.parse(await card(page, 0).locator('pre').innerText()).event.error, INJECTED);
-    assert.equal(await page.locator('#audit-filter option[value="' + TYPE + '"]').textContent(), 'Blocked / withheld responses');
+    assert.equal(await page.locator('#audit-filter option[value="' + TYPE + '"]').textContent(), 'Responses withheld');
     await page.screenshot({path: join(artifacts, 'marked-provider-outcomes.png'), fullPage: true});
   })],
   ['legacy status release-started partial and malformed markers remain unknown', browser => fixture(browser, [
@@ -154,7 +163,8 @@ const tests = [
       await load(() => page.locator('#audit-refresh').click(), [items[0]]);
       assert.deepEqual(reads.at(-1), {type: TYPE, query: ATTEMPT});
       assert.equal(await note(page, 0).getAttribute('data-audit-provider-outcome'), 'write_unconfirmed');
-      assert.equal(await page.locator('#audit-verification').innerText(), 'Not checked in this session.');
+      await page.locator('#audit-integrity > summary').click();
+      assert.equal(await page.locator('#audit-verification').innerText(), 'Verify the stored audit chain again for this history view.');
     });
   }],
   ['mobile warning and expandable metadata remain readable without an action or retry control', browser => fixture(browser,
@@ -165,6 +175,32 @@ const tests = [
       assert.equal(await card(page, 0).locator('button, a, input').count(), 0);
       await page.screenshot({path: join(artifacts, 'provider-write-warning-mobile.png'), fullPage: true});
     })],
+  ['routine history is compact, details retain original records and an empty search is not absence proof', async browser => {
+    const items = Array.from({length: 20}, (_, index) => item(index + 1, {}, 'operator_catalog.credential.created'));
+    await fixture(browser, items, async (page, {load, reads}) => {
+      for (const width of [1280, 390]) {
+        await page.setViewportSize({width, height: 844});
+        assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+        const height = (await page.locator('#audit-list').boundingBox()).height;
+        assert(height < 4000, '20 routine records should not require more than 4000 pixels');
+        assert.equal(await page.locator('#audit-list details[open]').count(), 0);
+        assert.equal(await page.locator('#audit-list time').first().getAttribute('datetime'), items[0].created_at);
+        assert.equal(await page.locator('#audit-integrity').getAttribute('open'), null);
+        await page.screenshot({path: join(artifacts, 'compact-audit-' + width + '.png'), fullPage: true});
+      }
+      const before = reads.length;
+      await card(page, 0).locator('summary').click();
+      assert.deepEqual(JSON.parse(await card(page, 0).locator('pre').innerText()), items[0]);
+      await page.locator('#audit-integrity > summary').click();
+      assert(await page.locator('#audit-verify').isVisible());
+      assert.equal(reads.length, before, 'opening details never requests another history page');
+      await load(() => page.locator('#audit-filter').selectOption(DENIED), []);
+      assert(await page.locator('#audit-empty').isVisible());
+      assert.match(await page.locator('#audit-empty').innerText(), /does not prove.*never happened/);
+      await load(() => page.locator('#audit-filter').selectOption(''), items);
+      assert(!(await page.locator('#audit-empty').isVisible()));
+    });
+  }],
 ];
 async function main() {
   assert.equal(process.argv.length, 2, 'synthetic fixture accepts no live targets');

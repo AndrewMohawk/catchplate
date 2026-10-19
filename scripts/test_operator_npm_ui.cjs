@@ -13,7 +13,7 @@ const {credential, application, rule, IDS, NOW} = require('./test_operator_catal
 const {publicCatalog, digest} = require('./test_operator_ordinary_modes_browser.cjs');
 const {clientCredentialInput, credentialHeaderTarget} = require('../catchplate/operator_demo_web/app.js');
 const ASSETS = resolve(__dirname, '../catchplate/operator_demo_web');
-const FILES = ['workspace_core.js', 'credential_guide_data.js', 'workspace_credential_guides.js', 'workspace_github.js', 'workspace_npm.js', 'workspace_npm_publish.js',
+const FILES = ['workspace_core.js', 'workspace_inventory.js', 'credential_guide_data.js', 'workspace_credential_guides.js', 'workspace_common_apps.js', 'workspace_github.js', 'workspace_npm.js', 'workspace_npm_publish.js',
   'workspace_x.js', 'workspace_alchemy.js', 'workspace_aws.js', 'workspace_ecr.js', 'workspace_resources.js', 'workspace_connect.js'];
 const SOURCE = FILES.map(name => readFileSync(resolve(ASSETS, name), 'utf8')).join('\n');
 const HTML = readFileSync(resolve(ASSETS, 'index.html'), 'utf8');
@@ -51,7 +51,10 @@ class Node {
     this.value = attrs.value || ''; this.hidden = Object.hasOwn(attrs, 'hidden'); this.disabled = Object.hasOwn(attrs, 'disabled');
     this.checked = Object.hasOwn(attrs, 'checked'); this.textContent = ''; this.id = attrs.id || ''; this.open = false;
   }
-  append(...nodes) { for (const node of nodes) { node.parent = this; this.children.push(node); } }
+  append(...nodes) { for (const node of nodes) {
+    node.parent = this; this.children.push(node);
+    if (this.tag === 'select' && this.children.length === 1) this.value = node.value;
+  } }
   replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
   get firstElementChild() { return this.children[0]; }
   // Connect reads HTMLSelectElement.options when updating provider choices.
@@ -62,6 +65,17 @@ class Node {
     for (const node of nodes) node.parent = this.parent;
     this.parent.children.splice(this.parent.children.indexOf(this) + 1, 0, ...nodes);
   }
+  before(...nodes) {
+    if (!this.parent) return;
+    for (const node of nodes) node.parent = this.parent;
+    this.parent.children.splice(this.parent.children.indexOf(this), 0, ...nodes);
+  }
+  matches(selector) {
+    if (selector.startsWith('.')) return String(this.className || this.attrs.class || '').split(/\s+/).includes(selector.slice(1));
+    if (selector === 'details[data-resource-group]') return this.tag === 'details' && Object.hasOwn(this.dataset, 'resourceGroup');
+    return this.tag === selector;
+  }
+  closest(selector) { for (let node = this; node; node = node.parent) if (node.matches(selector)) return node; return null; }
   getAttribute(name) { return this.attrs[name] ?? null; }
   setAttribute(name, value) { this.attrs[name] = String(value); }
   removeAttribute(name) { delete this.attrs[name]; }
@@ -81,8 +95,9 @@ class Node {
   scrollIntoView() {}
   descendants() { return this.children.flatMap(node => [node, ...node.descendants()]); }
   querySelectorAll(selector) {
-    const tags = selector.split(',');
-    return this.descendants().filter(node => tags.includes(node.tag) || selector === 'details' && node.tag === 'details');
+    const selectors = selector.split(',').map(value => value.trim());
+    return this.descendants().filter(node => selectors.some(value => value === '.metadata dd' ?
+      node.tag === 'dd' && node.parent?.matches('.metadata') : node.matches(value)));
   }
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
 }

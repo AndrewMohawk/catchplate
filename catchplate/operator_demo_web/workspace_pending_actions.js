@@ -438,6 +438,9 @@ function createPendingActionsView({onAuthenticationLost = () => {}, recoveryBloc
     status('Your Catchplate session could not be verified. Reload and sign in again.'); render();
   }
   el('pending-actions-refresh').addEventListener('click', () => { void refresh(); });
+  el('pending-requests-jump').addEventListener('click', () => {
+    const heading = el('pending-requests-title'); heading.focus(); heading.scrollIntoView({block: 'start'});
+  });
   window.addEventListener('pagehide', () => show(false));
   render();
   return {show, refresh, authenticationLost, setCatalog(value) {

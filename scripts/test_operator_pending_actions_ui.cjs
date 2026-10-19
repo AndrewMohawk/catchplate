@@ -64,7 +64,7 @@ function load(extras = {}) {
 }
 function fixture(options = {}) {
   const nodes = new Map(['pending-actions', 'pending-actions-status', 'pending-actions-summary', 'pending-actions-access', 'pending-actions-refresh',
-    'pending-actions-list', 'pending-actions-selected'].map(id => [id, new Node()]));
+    'pending-actions-list', 'pending-actions-selected', 'pending-requests-jump', 'pending-requests-title'].map(id => [id, new Node()]));
   const node = id => { assert(nodes.has(id), 'known queue DOM target'); return nodes.get(id); };
   const calls = [], faults = [], replacements = [], storageReads = [], events = {}, storage = new Map(options.storage || []);
   const allowedPaths = options.host ? [CAP, HOST, HOST + '/' + ID, HOST + '/' + OTHER,

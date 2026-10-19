@@ -258,6 +258,7 @@ async function runLiveBrowser(browser, {baseUrl, fixtureOrigin = 'https://demo-u
     requireCondition(!JSON.stringify(audit).includes(clientToken) && !JSON.stringify(audit).includes(providerSecret), 'audit leaked secrets');
     await page.waitForFunction(() => document.querySelector('#audit-list').textContent.includes('operator_demo.connection.created'));
     const verifyResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/audit/verify');
+    await page.locator('#audit-integrity > summary').click();
     await page.locator('#audit-verify').click(); const verified = await (await verifyResponse).json();
     requireCondition(verified.ok === true && verified.complete === true, 'complete local audit verification failed');
     checks.push('persisted_creation_audit_and_complete_chain');

@@ -198,6 +198,7 @@ function createEcrPublicationsView(workspace) {
   }
   function render() {
     el('ecr-publications-panel').hidden = !capability() && rows.length === 0;
+    el('pending-images-jump').disabled = el('ecr-publications-panel').hidden;
     el('ecr-publications-refresh').disabled = busy;
     el('ecr-publications-load-more').hidden = nextCursor === null;
     el('ecr-publications-load-more').disabled = busy;
@@ -329,6 +330,10 @@ function createEcrPublicationsView(workspace) {
     message('Your session could not be verified. Reload and sign in again.');
   }
   el('ecr-publications-refresh').addEventListener('click', () => { if (!busy) void load(); });
+  el('pending-images-jump').addEventListener('click', () => {
+    if (el('ecr-publications-panel').hidden) return;
+    const heading = el('ecr-publications-title'); heading.focus(); heading.scrollIntoView({block: 'start'});
+  });
   el('ecr-client-refresh').addEventListener('click', () => { if (!busy) void load(); });
   for (const id of ['ecr-publications-load-more', 'ecr-client-load-more']) el(id).addEventListener('click', () => { if (!busy) void load(true); });
   el('ecr-client-publication').addEventListener('change', () => {

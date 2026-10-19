@@ -46,7 +46,8 @@ async function ready(page) {
 const count = (state, path) => state.requests.filter(item => item.path === path).length;
 const selected = page => page.locator('#pending-actions-selected');
 async function noReview(page) {
-  assert.equal(await page.locator('#pending-actions [data-pending-review]').count(), 0);
+  for (const button of await page.locator('#pending-actions [data-pending-review]').all())
+    assert(await button.isDisabled(), 'unavailable or held review must not be actionable');
   assert.equal(await page.locator('#pending-actions').getByRole('button', {name: /^(Approve|Deny)/}).count(), 0);
 }
 async function fixture(browser, html, artifacts, label, options, exercise) {
@@ -153,6 +154,11 @@ const tests = [
       await page.setViewportSize({width: 390, height: 844}); assert(await selected(page).isVisible());
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
       await page.screenshot({path: join(artifacts, 'pending-actions-mobile.png'), fullPage: true});
+      const beforeJump = state.requests.length;
+      await page.locator('#pending-requests-jump').focus(); await page.keyboard.press('Enter');
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'pending-requests-title');
+      assert(await page.locator('#pending-images-jump').isDisabled());
+      assert.equal(state.requests.length, beforeJump, 'queue shortcut is navigation only');
       assert.equal(count(state, CAP), 1); assert.equal(count(state, LIST), 1);
     })],
   ['capability and metadata loading are separate and never open review', async (browser, html, artifacts) => {
@@ -214,12 +220,12 @@ const tests = [
       assert(!(await selected(page).innerText()).includes(OTHER)); assert.equal(new URL(page.url()).pathname, '/approvals/' + ID);
     });
   }],
-  ['held decisions stay held and all-true synthetic capability still has no wired review', async (browser, html, artifacts) => {
+  ['held decisions stay held even when a synthetic capability advertises protected review', async (browser, html, artifacts) => {
     const key = 'catchplate.approvalDecisionUncertain.' + ID;
     return fixture(browser, html, artifacts, 'held-decision', {path: '/approvals/' + ID, rows: [approval()], storage: [[key, ID]],
       capability: capability({can_open_native_review: true, can_decide: true, reason: null})}, async (page, state) => {
       await ready(page); assert((await selected(page).innerText()).includes('submitted decision needs status recovery'));
-      assert((await page.locator('#pending-actions-access').innerText()).includes('not connected'));
+      assert.match(await page.locator('#pending-actions-access').innerText(), /inspect its protected review before deciding/);
       const before = await page.evaluate(() => Object.entries(sessionStorage));
       await page.locator('#pending-actions-refresh').click(); await ready(page);
       assert.deepEqual(await page.evaluate(() => Object.entries(sessionStorage)), before);
@@ -254,6 +260,39 @@ const tests = [
       await page.screenshot({path: join(artifacts, 'terminal-status-mobile.png'), fullPage: true});
       assert.equal(count(state, '/api/approvals/' + ID), 2);
     })],
+  ['request approvals precede image reviews and both keyboard shortcuts only move focus', async (browser, _html, artifacts) => {
+    const catalogFixture = require('./test_operator_catalog_browser.cjs');
+    const {CAPABILITY} = require('./test_operator_ecr_ui.cjs');
+    return catalogFixture.fixture(browser, {catalogTransform: value => ({...value,
+      capabilities: {...value.capabilities, ecr_publication: CAPABILITY}})}, async (page, state) => {
+      const reads = [], errors = [];
+      await page.route('**/api/**', async route => {
+        const request = route.request(), url = new URL(request.url()), path = url.pathname + url.search;
+        const replies = {[CAP]: capability(), [LIST]: [], '/api/operator-demo/ecr-publications': {publications: [], next_cursor: null}};
+        if (!Object.hasOwn(replies, path)) return route.fallback();
+        if (request.method() !== 'GET' || request.postData() !== null || url.origin !== 'https://operator-catalog.example.test') {
+          errors.push('unexpected request'); return route.abort();
+        }
+        reads.push(path);
+        await route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify(replies[path])});
+      });
+      await catalogFixture.ready(page); await catalogFixture.view(page, 'pending-actions'); await ready(page);
+      await page.waitForFunction(() => document.getElementById('ecr-publications-summary').dataset.state === 'ready');
+      const before = reads.length;
+      assert.deepEqual([...reads].sort(), [CAP, LIST, '/api/operator-demo/ecr-publications'].sort());
+      for (const width of [1280, 390]) {
+        await page.setViewportSize({width, height: 844});
+        assert((await page.locator('#pending-requests-panel').boundingBox()).y < (await page.locator('#ecr-publications-panel').boundingBox()).y);
+        for (const [jump, title] of [['pending-images-jump', 'ecr-publications-title'], ['pending-requests-jump', 'pending-requests-title']]) {
+          await page.locator('#' + jump).focus(); await page.keyboard.press('Enter');
+          assert.equal(await page.evaluate(() => document.activeElement.id), title);
+        }
+        assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+        await page.screenshot({path: join(artifacts, 'request-and-image-queues-' + width + '.png'), fullPage: true});
+      }
+      assert.equal(reads.length, before); assert.equal(state.posts.length, 0); assert.deepEqual(errors, []);
+    });
+  }],
 ];
 async function runSuite(browser, {onlyGroups = null} = {}) {
   const selectedGroups = onlyGroups === null ? tests.map((_, index) => index) : onlyGroups;

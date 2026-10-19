@@ -13,7 +13,7 @@ Open **Notifications**. There are four independent slots:
 | Action-required alerts | Team attention requests | An automation receiver for attention requests |
 | Audit-log delivery | Selected activity summaries | Structured selected-event copies |
 
-1. Choose the channel and destination type; give the slot a useful label.
+1. Choose **Action alerts** or **Audit logs**, then **Configure destination** under Slack or Generic webhook. Give the destination a useful label.
 2. Enter or replace its webhook URL in the authenticated form. Treat this URL as a secret; saved URLs are write-only.
 3. Select its event filters, enable it when ready, and choose the attempt limit.
 4. Choose **Save settings**. Review the saved result before leaving.
@@ -32,6 +32,8 @@ After saving, use **Send synthetic test** for that exact enabled slot. It sends 
 
 Check the delivery result: **queued** is not **delivered**. A receiver acknowledgement is not proof that a person acted, that a YubiKey ceremony completed or that an audit archive was verified. If the request's result is uncertain, use **Check operation result (read only)**. Do not repeat the test automatically.
 
+Open **Delivery health and advanced status** for worker, queue and optional native-source details. Recorded failures, unknown outcomes or a source backlog also appear above the destination cards with a direct health shortcut. An enabled-destination count describes saved settings, not successful delivery.
+
 Each slot supports one to three total attempts. Only known pre-dispatch DNS, connection or TLS failures are eligible for the documented automatic retry. HTTP errors and uncertain delivery are not automatically replayed. New configuration revisions suppress queued deliveries for the old revision rather than redirecting them to the new URL. [Retry and recovery](https://github.com/AndrewMohawk/catchplate/blob/main/docs/operator-notifications.md#outbox-retry-and-recovery).
 
 ## Why an action alert might not arrive
@@ -44,7 +46,9 @@ A real required action belongs on its authenticated review page. Notification li
 
 ### Find a pending action
 
-New workspace builds include **Pending actions** for saved request metadata.
+Open **Pending actions → Request approvals** for ordinary requests.
+**Image reviews** jumps to the separate ECR publication queue when available.
+Neither shortcut opens a private review or submits a decision.
 Deployment status is recorded in the
 [project tracker](https://github.com/AndrewMohawk/catchplate/blob/main/docs/project-completion.md#current-live-deployment).
 Choose **Select request** to inspect its ID, client, route, method, expiry and
@@ -65,9 +69,9 @@ not change these rules. See [host-review operations](Operations-and-maintenance.
 ### Inspect audit history
 
 1. Open **Audit log → Refresh log**.
-2. Filter for **Allowed responses** or **Blocked / withheld responses**, or search by client, credential, permission or event.
-3. Match the recorded identity and outcome to the request you actually ran. Use **Load older events** if needed.
-4. For integrity checking, choose **Verify audit log**.
+2. Filter for **Responses released**, **Responses withheld**, approvals or saved-access changes. Search recorded text or exact client/credential/permission IDs; friendly names are not guaranteed to be stored in every event.
+3. Match the recorded identity and outcome to the request you actually ran. Times use your browser's timezone; **Event details** retains the full recorded event and original timestamp. Use **Load older events** if needed. No matches in scanned history do not prove an operation never happened.
+4. For integrity checking, open **Check local audit integrity → Verify audit log**. Opening the section alone does not start verification.
 
 A verification result is a point-in-time check. After refreshing, changing the
 search or filter, or loading older events, verify again before treating the

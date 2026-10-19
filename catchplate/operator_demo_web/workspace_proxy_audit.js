@@ -718,7 +718,7 @@ function createAuditView(workspace) {
   function authenticationLost() {
     ++epoch; ++verificationEpoch; authenticationRequired = true;
     loaded = false; cursor = null; count = 0; selection = ''; loading = false; verifying = false;
-    element('audit-list').replaceChildren(); element('audit-more').hidden = true;
+    element('audit-list').replaceChildren(); element('audit-more').hidden = true; element('audit-empty').hidden = true;
     element('audit-status').textContent = authenticationMessage;
     element('audit-verification').textContent = authenticationMessage;
     controls();
@@ -744,16 +744,31 @@ function createAuditView(workspace) {
     if (element('audit-filter').value) query.set('eventType', element('audit-filter').value);
     if (element('audit-query').value.trim()) query.set('q', element('audit-query').value.trim());
     if (append && cursor) query.set('cursor', cursor);
-    loading = true; element('audit-status').textContent = 'Loading stored events...'; controls();
+    loading = true; element('audit-empty').hidden = true; element('audit-status').textContent = 'Loading stored events...'; controls();
     try {
       const result = await workspace.api('/api/audit/search?' + query);
       if (version !== epoch) return;
       if (result.ok !== true || !Array.isArray(result.items)) throw operatorError('The audit response was incomplete.');
       for (const event of result.items) {
         const summary = presentation(event);
-        const card = textNode('article', undefined, 'card event-card'); card.append(textNode('h3', summary.title), textNode('time', event.created_at || 'Time not reported'));
+        const card = textNode('article', undefined, 'card event-card audit-row');
+        const heading = textNode('div', undefined, 'audit-event-heading');
+        const time = textNode('time', typeof event.created_at === 'string' && Number.isFinite(Date.parse(event.created_at)) ?
+          new Date(event.created_at).toLocaleString(undefined, {dateStyle: 'medium', timeStyle: 'short'}) : 'Time not reported');
+        if (typeof event.created_at === 'string' && Number.isFinite(Date.parse(event.created_at))) {
+          time.dateTime = event.created_at; time.title = event.created_at;
+        }
+        heading.append(textNode('h3', summary.title), time); card.append(heading);
         if (summary.metadata) { const metadata = textNode('p', summary.metadata, 'small muted'); metadata.dataset.auditSummary = ''; card.append(metadata); }
-        if (summary.reason) { const reason = textNode('p', summary.reason); reason.dataset.auditReason = ''; card.append(reason); }
+        const details = textNode('details'); details.append(textNode('summary', 'Event details'));
+        if (summary.reason) {
+          const reason = textNode('p', summary.reason, 'small'); reason.dataset.auditReason = '';
+          (summary.reviewRequired || ['data_plane.request.denied', 'data_plane.response.blocked'].includes(event.event_type) ? card : details).append(reason);
+        }
+        if (event.event_type === 'data_plane.policy.reload_failed') {
+          const note = textNode('p', 'Historical event. ', 'small muted');
+          const link = textNode('a', 'Check the current policy on Overview'); link.href = '#overview'; note.append(link); card.append(note);
+        }
         if (summary.reviewRequired) {
           const review = textNode('a', 'Open Pending actions', 'button secondary');
           review.href = '#pending-actions'; review.dataset.auditPendingLink = ''; card.append(review);
@@ -763,10 +778,11 @@ function createAuditView(workspace) {
           const note = textNode('p', outcome.text, outcome.warning ? 'warning' : 'small muted');
           note.dataset.auditProviderOutcome = outcome.kind; card.append(note);
         }
-        const details = textNode('details'); details.append(textNode('summary', 'Event details'), textNode('pre', JSON.stringify(event, null, 2))); card.append(details); element('audit-list').append(card);
+        details.append(textNode('pre', JSON.stringify(event, null, 2))); card.append(details); element('audit-list').append(card);
       }
       count += result.items.length; cursor = result.has_more && typeof result.next_cursor === 'string' ? result.next_cursor : null; loaded = true;
       element('audit-more').hidden = !cursor;
+      element('audit-empty').hidden = count !== 0;
       element('audit-status').textContent = `${count} events shown. ` + (result.has_more || result.complete === false ? 'Partial history; load older events to continue.' : 'End of matching history.');
     } catch (error) { if (version === epoch) { loaded = false; element('audit-status').textContent = operatorMessage(error); element('audit-more').hidden = true; } }
     finally { if (version === epoch) { loading = false; controls(); } }

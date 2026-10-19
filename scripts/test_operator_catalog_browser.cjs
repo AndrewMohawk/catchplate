@@ -474,6 +474,7 @@ const tests = [
     await page.waitForFunction(() => document.querySelectorAll('#audit-list .event-card').length === 1);
     await page.locator('#audit-filter').selectOption('data_plane.response.released');
     await page.waitForFunction(() => document.querySelector('#audit-list').textContent.includes('data_plane.response.released'));
+    await page.locator('#audit-integrity > summary').click();
     await page.locator('#audit-verify').click(); await page.waitForFunction(() => document.querySelector('#audit-verification').textContent.includes('consistent'));
     await view(page, 'applications'); assert(await card(page).locator('[data-action="rotate-application"]').isVisible());
     assert(await card(page).locator('[data-action="revoke-application"]').isVisible());

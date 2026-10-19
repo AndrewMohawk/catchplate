@@ -245,6 +245,7 @@ async function open(page) {
   // These protocol fixtures explicitly open their default editor. The focused
   // summary suite separately verifies all four editors begin collapsed.
   await edit(page);
+  await page.locator('#notifications-delivery-details > summary').click();
 }
 async function submit(page, target = form(page), kind = 'save') {
   await edit(page, target);
@@ -280,6 +281,7 @@ const tests = [
       assert.equal(observed.reads.length, 1);
       assert.equal(await page.locator('form[data-notification-slot],[data-notification-save],[data-notification-test]').count(), 0);
       assert.match(await page.locator('#notifications-status').innerText(), /disabled|unavailable|not enabled/i);
+      await page.locator('#notifications-delivery-details > summary').click();
       assert.match(await page.locator('#notifications-worker').innerText(), /disabled/i);
       assert.equal(observed.snapshot.slots.length, 4); assert(observed.snapshot.slots.every(item => item.revision === 0));
       assert.equal(observed.posts.length, 0); assert.equal(state.posts.length, 0);
@@ -697,6 +699,55 @@ const tests = [
         assert.match(await form(page, SLOTS[index]).innerText(), text);
       assert.match(await form(page, SLOTS[3]).innerText(), /deadline.*not.*extended/i);
       assert.equal(observed.posts.length, 0); await screenshot(page, 'notification-backlog-and-distinct-outcomes');
+    })],
+  ['first-use purposes, collapsed diagnostics and keyboard shortcuts do not change saved destinations', browser => fixture(browser,
+    {status: {slots: SLOTS.map(name => slot(name, {revision: 0, label: '', enabled: false, secret_present: false, event_types: []}))}},
+    async (page, observed) => {
+      await ready(page); await view(page, 'notifications'); await settled(page);
+      const saved = clone(observed.snapshot), reads = observed.reads.length;
+      for (const width of [1280, 390]) {
+        await page.setViewportSize({width, height: 844});
+        assert.equal(await page.locator('[data-notification-fields]:visible').count(), 0);
+        assert.equal(await page.locator('#notifications-delivery-details').getAttribute('open'), null);
+        assert(!(await page.locator('#notification-operation-status').isVisible()));
+        assert(!(await page.locator('#notifications-health-summary').isVisible()));
+        const choices = page.locator('[data-notification-jump]');
+        assert.equal(await choices.count(), 2);
+        for (const choice of await choices.all()) assert.match(await choice.innerText(), /0 of 2 destinations enabled/);
+        assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+        await screenshot(page, 'notification-first-use-' + width);
+        for (const channel of ['action_required', 'audit_log']) {
+          const choice = page.locator('[data-notification-jump="' + channel + '"]');
+          await choice.focus(); await page.keyboard.press('Enter');
+          assert.equal(await page.evaluate(() => document.activeElement.id), 'notification-channel-' + channel);
+        }
+      }
+      const target = form(page, 'action_required.slack');
+      await edit(page, target);
+      assert.match(await target.locator('[name="url"]').getAttribute('placeholder'), /hooks\.slack\.com\/services/);
+      assert.equal(await target.locator('[name="enabled"]').isChecked(), false);
+      assert.equal(await target.locator('[name="event_types"]:checked').count(), 0);
+      await page.locator('#notifications-delivery-details > summary').click();
+      assert(await page.locator('#notifications-worker').isVisible());
+      assert.match(await page.locator('#notifications-native-status').innerText(), /not configured|not connected/i);
+      assert.deepEqual(observed.snapshot, saved); assert.equal(observed.reads.length, reads);
+      assert.equal(observed.posts.length, 0); await clean(page);
+    })],
+  ['delivery issues stay visible before advanced details and the health shortcut only reveals diagnostics', browser => fixture(browser,
+    {status: {queue: {...status().queue, failed: 2, outcome_unknown: 1},
+      backlog: {pending_source_events: 7, queue_capacity: 256, retained_capacity: 10000}}},
+    async (page, observed) => {
+      await ready(page); await view(page, 'notifications'); await settled(page);
+      const reads = observed.reads.length;
+      assert(await page.locator('#notifications-health-summary').isVisible());
+      assert.match(await page.locator('#notifications-health-summary').innerText(), /Recorded delivery issues: 2 failed, 1 unknown outcomes, 7 source events waiting/);
+      assert.equal(await page.locator('#notifications-delivery-details').getAttribute('open'), null);
+      await page.locator('#notifications-health-summary button').click();
+      assert(await page.locator('#notifications-queue').isVisible());
+      assert(await page.locator('#notifications-delivery-details > summary').evaluate(node => node === document.activeElement));
+      assert.equal(observed.reads.length, reads); assert.equal(observed.posts.length, 0);
+      await page.setViewportSize({width: 390, height: 844});
+      await screenshot(page, 'notification-health-visible-mobile');
     })],
 ];
 

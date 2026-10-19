@@ -1,3 +1,5 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # Get your first client working
 
 [Home](Home.md) · [Provider choices](Credentials-and-providers.md) · [Client recipes](Clients-and-recipes.md)
@@ -12,10 +14,12 @@ Do not enter secrets in chat, issue comments or checked-in example files. The pr
 
 Need to create the provider integration first? Use the [GitHub App walkthrough](GitHub-App-setup.md) or [Google/X OAuth setup](OAuth-provider-setup.md). For your own JSON API, use the [custom Bearer/header example](Custom-API-credentials.md).
 
-The retained main console still uses Serverware while this source uses
-Catchplate. Follow the [rename status](../catchplate-rename.md) and hand over the
-client release matching the actual instance; do not substitute a new hostname
-or placeholder just because it appears in these source examples.
+Use [the Catchplate console](https://catchplate.example.com/) and hand over
+the [matching client release](../developer-quickstart.md#before-you-start).
+Returning clients need a fresh private configuration and the new Catchplate CA;
+the old hostname and CA are no longer supported. Do not edit old downloads or
+rename an old certificate to make them appear current. Token expiry and saved
+permissions are not reset by the [rename](../catchplate-rename.md).
 
 ## 1. Save the provider credential
 

@@ -9,7 +9,7 @@ in this repository and a local checkout; a separate GitHub Wiki is optional. See
 [Wiki publication status](https://github.com/AndrewMohawk/catchplate/blob/main/docs/wiki-publishing.md)
 only if you maintain the documentation.
 
-[Open the retained console](https://serverware.example.com/) using the homelab sign-in. This is the persistent product instance, not a separate demo. Renamed source and isolated/sandbox checks are available; the main installation still uses Serverware and its retained-state/hostname cutover remains pending. See [rename status](../catchplate-rename.md). Ordinary setup does not require starting a pilot, building the proxy or enrolling a security key. [Instance walkthrough](https://github.com/AndrewMohawk/catchplate/blob/main/docs/operator-demo.md).
+[Open the Catchplate console](https://catchplate.example.com/) using the homelab sign-in. This is the persistent product instance, not a separate demo. Returning after the rename? Obtain a fresh private client configuration and the new Catchplate CA; old hostnames, downloads and CA trust are not a compatibility route. See the [developer handoff](../developer-quickstart.md#before-you-start) and [rename record](../catchplate-rename.md). Ordinary setup does not require starting a pilot, building the proxy or enrolling a security key. [Instance walkthrough](https://github.com/AndrewMohawk/catchplate/blob/main/docs/operator-demo.md).
 
 **Choose where you are:** [I need to grant access](Getting-started.md) ·
 [I already have the private JSON and CA](../developer-quickstart.md) ·

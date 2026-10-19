@@ -10,11 +10,11 @@ own scoped Catchplate login. The proxy checks its permissions, supplies the
 provider credential and records the outcome. Supported permissions can also
 restrict response data or require human approval.
 
-**Rename in progress:** the GitHub repository, source and built image are now
-Catchplate. Isolated fresh-install and migrated-state startup checks passed.
-The main live installation still uses Serverware identities; its state and
-public hostname cutover remain pending. The separate synthetic sandbox is now
-running as Catchplate with its retained state. See the [rename checklist](docs/catchplate-rename.md).
+The running console is [catchplate.example.com](https://catchplate.example.com/).
+The project, live console and proxy now use Catchplate. Returning clients need
+a fresh configuration and the new Catchplate CA; the old hostname, downloaded
+configuration and CA are not a compatibility route. See the
+[deployment and rename record](docs/catchplate-rename.md).
 
 ## Start here
 
@@ -116,9 +116,10 @@ Posting, publishing and other actions require explicit inputs and confirmation.
   disconnect accounts and recover uncertain saves without accidental retries.
 
 The console and forward proxy have different addresses. The running proxy is
-`https://serverware-proxy.example.com/` until the verified Catchplate cutover;
-use the configuration downloaded
-from the console, not the console address, in your client.
+`https://catchplate-proxy.example.com/`; use a fresh configuration downloaded
+from the console, not the console address, in your client. Download and verify
+the new `catchplate-ca.pem` alongside it. Do not rename an old CA file or disable
+TLS verification to get past a trust error.
 
 ## Current scope and trust
 
@@ -150,7 +151,8 @@ the app, proxy and authenticated TLS edge without homelab dependencies.
 starts passed, with separate browser, persisted-state restart and TLS replacement
 checks. The renamed image passed a fresh fixture-enabled install, retained-state
 startup and the migrated live sandbox's proxy/audit checks; this does not repeat
-every lifecycle check or prove main-public/real-provider acceptance. See the
+every lifecycle check or establish real-provider acceptance. The main cutover
+has its own [deployment record](docs/project-completion.md#current-live-deployment). See the
 [rename evidence](docs/catchplate-rename.md), [verification record](docs/standalone-installation-verification.md)
 and [self-hosting/activation guide](docs/self-hosting.md).
 The [retained deployment](docker/catchplate-operator-demo/README.md)

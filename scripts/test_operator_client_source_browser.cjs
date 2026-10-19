@@ -10,6 +10,8 @@ const {ready, view} = require('./test_operator_catalog_browser.cjs');
 const ROOT = resolve(__dirname, '..');
 async function run(browser) {
   const pin = JSON.parse(readFileSync(join(ROOT, 'docker/catchplate-operator-demo/client-source.json')));
+  assert.equal(pin.protocol, 'catchplate');
+  assert.match(pin.revision, /^[a-f0-9]{40}$/);
   const source = execFileSync('python3', ['-B', '-c', 'from catchplate.operator_demo_portal import render; print(render())'],
     {cwd: ROOT, encoding: 'utf8', timeout: 5000, maxBuffer: 1024 * 1024});
   const marker = "revision: 'main'"; assert.equal(source.split(marker).length, 2);

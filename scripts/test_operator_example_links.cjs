@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Inert public-code discovery checks only. No browser, HTTP, application,
 // generated recipe, package installation or provider request is run. The
-// retained-client check reads selected local Git objects, without checkout.
+// deployed-client check reads selected local Git objects, without checkout.
 const assert = require('node:assert/strict');
 const {readFileSync, statSync} = require('node:fs');
 const {resolve} = require('node:path');
@@ -92,10 +92,10 @@ function alchemy(chain = 'eth-mainnet') {
   return value;
 }
 const tests = [
-  ['retained protocol links select one immutable client revision without changing scope', () => {
+  ['deployed protocol links select one immutable client revision without changing scope', () => {
     const pin = JSON.parse(readFileSync(resolve(ROOT, 'docker/catchplate-operator-demo/client-source.json'), 'utf8'));
     assert.deepEqual(Object.keys(pin).sort(), ['protocol', 'repository', 'revision']);
-    assert.equal(pin.protocol, 'serverware'); assert.equal(pin.repository, BASE);
+    assert.equal(pin.protocol, 'catchplate'); assert.equal(pin.repository, BASE);
     assert.match(pin.revision, /^[a-f0-9]{40}$/);
     const marker = "revision: 'main'"; assert.equal(PROXY.split(marker).length, 2);
     const pinned = context();
@@ -128,16 +128,16 @@ const tests = [
       for (const [language, filename] of [['node', base === 'alchemy-chain-status' ? 'request.mjs' : 'client.mjs'], ['python', python], ['go', 'main.go']]) {
         const file = 'examples/' + base + '-' + language + '/' + filename;
         const code = source(file);
-        assert(code.includes('serverware-' + marker + '-placeholder-v1'), file + ' must contain the retained public marker');
-        assert(!code.includes('catchplate-' + marker + '-placeholder-v1'), file + ' must not use renamed markers');
+        assert(code.includes('catchplate-' + marker + '-placeholder-v1'), file + ' must contain the deployed public marker');
+        assert(!code.includes('serverware-' + marker + '-placeholder-v1'), file + ' must not use obsolete markers');
         assert(source('examples/' + base + '-' + language + '/README.md').includes('--config'));
       }
     }
     for (const file of ['examples/mcp/README.md', 'examples/managed-client/README.md']) assert(source(file).length > 0);
-    assert(source('examples/npm-registry/core.mjs').includes("PUBLIC_NPM_DUMMY = 'serverware-npm-placeholder-v1'"));
-    assert(source('examples/common-apps/request.py').includes('"serverware-" + config["app_preset"] + "-placeholder-v1"'));
-    assert(source('examples/mcp/legacy.py').includes('token serverware-github-placeholder-v1'));
-    assert(source('examples/managed-client/managed_client.py').includes('SETUP_SCHEMA = "serverware.managedClientSetup/v1"'));
+    assert(source('examples/npm-registry/core.mjs').includes("PUBLIC_NPM_DUMMY = 'catchplate-npm-placeholder-v1'"));
+    assert(source('examples/common-apps/request.py').includes('"catchplate-" + config["app_preset"] + "-placeholder-v1"'));
+    assert(source('examples/mcp/legacy.py').includes('token catchplate-github-placeholder-v1'));
+    assert(source('examples/managed-client/managed_client.py').includes('SETUP_SCHEMA = "catchplate.managedClientSetup/v1"'));
     assert.equal(networkCalls, 0);
   }],
   ['private-config handoffs select one prepared runtime without compiling during execution', () => {

@@ -6,7 +6,7 @@
 
 ## Configure a client, not the console URL
 
-Open **Proxy setup → Connect a client** and select the client and permission. For a supplied example, use the complete private configuration and CA downloads; the file already contains the proxy endpoint and client login. **Proxy connection details and manual setup** contains those settings when configuring your own HTTP client. **Administrator settings** is a separate view for destination and OAuth application configuration; it is not part of running a client. The retained browser console at `https://serverware.example.com/` and the forward proxy are different services. The Catchplate hostname cutover is pending; follow [rename status](../catchplate-rename.md) and do not rewrite an existing private configuration. Do not invent a port or use a private management address as the proxy.
+Open **Proxy setup → Connect a client** and select the client and permission. For a supplied example, use the complete private configuration and CA downloads; the file already contains the proxy endpoint and client login. **Proxy connection details and manual setup** contains those settings when configuring your own HTTP client. **Administrator settings** is a separate view for destination and OAuth application configuration; it is not part of running a client. The browser console at `https://catchplate.example.com/` and forward proxy at `https://catchplate-proxy.example.com/` are different services. Returning clients need a fresh handoff after the [rename](../catchplate-rename.md); do not rewrite an existing private configuration. Do not invent a port or use a private management address as the proxy.
 
 Before a client and permission are selected, the page explains what is missing
 instead of showing an empty request template. **Add a permission for …** carries
@@ -24,6 +24,12 @@ Use the [provided client recipes](Clients-and-recipes.md), which separate proxy 
 2. Save `catchplate-ca.pem` with the client configuration.
 3. Set the recipe's interception-CA path to that file.
 4. Verify the certificate with your operator and scope trust to the intended client. Keep TLS verification enabled. Do not use `curl -k`, disable SDK verification or install the interception CA system-wide.
+
+The rename issued a new Catchplate CA. An old CA is not the same certificate
+under a new filename and will not validate this proxy's interception certificates.
+Replace old CA trust in each intended client with the verified new download;
+do not keep it as a fallback. Obtain a fresh private configuration and the
+[matching client release](../developer-quickstart.md#before-you-start) together.
 
 There are two TLS checks:
 

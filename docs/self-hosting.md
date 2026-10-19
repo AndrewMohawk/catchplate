@@ -4,7 +4,7 @@
 
 ## Use the current instance
 
-**Administrator:** open the [running console](https://serverware.example.com/)
+**Administrator:** open the [running console](https://catchplate.example.com/)
 with the homelab login and follow [first-client setup](wiki/Getting-started.md).
 You can save a credential first, then give a client a scoped permission.
 Opening the console does not build the proxy, start a pilot or require a
@@ -14,10 +14,12 @@ security-key ceremony.
 go straight to the [developer quickstart](developer-quickstart.md). You do not
 need to install Catchplate, sign in as an administrator or obtain the provider key.
 
-The main instance still uses the Serverware hostname and runtime identity while
-this repository is named Catchplate. Keep its downloads with the matching client
-release until the operator completes the [rename](catchplate-rename.md).
-Do not manually substitute hostnames, protocol markers or private configuration.
+The main instance and repository now use Catchplate. The forward proxy is
+`https://catchplate-proxy.example.com/`, not the console URL. Returning
+clients need a fresh private configuration, the new Catchplate CA and the
+[matching client release](developer-quickstart.md#before-you-start). There is no
+old-hostname or old-CA compatibility route. Do not manually substitute hostnames,
+protocol markers or private configuration. See the [rename record](catchplate-rename.md).
 
 The [current deployment record](project-completion.md#current-live-deployment)
 identifies this instance's exact source, proxy binary and retained Compose

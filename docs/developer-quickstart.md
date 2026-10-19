@@ -20,35 +20,32 @@ environment-variable examples:
 | Job and example | Provider, allowed operation/resource, selected language and matching project/release. One permission is not arbitrary provider access. |
 | Access details | Token expiry, console URL for review/audit, and who can renew or repair access. The proxy URL is already in the JSON. |
 
-During the [Catchplate rename](catchplate-rename.md), the retained main instance
-still serves Serverware. Keep its existing downloads and matching client release
-together: checking out renamed source does not migrate that server. For that
-retained instance, use the [Serverware-compatible client examples at
-`00ddd0ef`](https://github.com/AndrewMohawk/catchplate/tree/main/examples),
-the last commit before the protocol/package rename. Do not follow a moving
-`main` example link for those downloads: the newer clients use different
-placeholder names, even if the provider SDK and command look the same.
+The running instance uses `https://catchplate.example.com/` for the console
+and `https://catchplate-proxy.example.com/` for the proxy. Its matching
+[Catchplate client examples are pinned to
+`f93fd9de`](https://github.com/AndrewMohawk/catchplate/tree/main/examples).
+Use that release with the new handoff; a moving `main` link can change later.
 
 If you already have this repository locally, create a separate client checkout
 without switching your current worktree or changing the server:
 
 ```sh
-git worktree add --detach ../catchplate-serverware-clients 00ddd0ef84812286d9046cc7073281939e4f4261
-cd ../catchplate-serverware-clients
+git worktree add --detach ../catchplate-clients f93fd9de8f178838f07a0bfd5693b621c36cf064
+cd ../catchplate-clients
 ```
 
-A shallow checkout may need `git fetch origin 00ddd0ef84812286d9046cc7073281939e4f4261`
+A shallow checkout may need `git fetch origin f93fd9de8f178838f07a0bfd5693b621c36cf064`
 first. Use the selected example's README in **that checkout**, including its
-Serverware variable names, with the unmodified downloaded JSON and CA. Do not
-run server installation or migration commands from this client checkout. For
-an already migrated Catchplate instance, use the matching Catchplate release
-instead, not this compatibility snapshot.
+Catchplate variable names, with the unmodified downloaded JSON and CA. Do not
+run server installation or migration commands from this client checkout.
 
-Renamed
-isolated/sandbox checks are not a completed main-instance cutover. Only after
-your operator confirms the corresponding server/permission migration, use the
-scoped [local converter](../examples/client-config-migration.md) for supported
-ordinary exports. Signed/managed/ECR/custom configurations need a new handoff.
+**Returning after the rename?** Ask your operator for a fresh private client
+configuration and the newly issued `catchplate-ca.pem`. The old address, protocol
+markers and CA are no longer supported by this instance; changing filenames or
+editing a hostname is not a migration. Do not reuse the old CA or disable TLS
+verification. The rename does not renew expired tokens or recover a one-time
+token. If a replacement token is needed, coordinate that explicit change with
+every workload using the client. See the [rename record](catchplate-rename.md).
 
 The JSON contains your expiring Catchplate login. Keep it out of Git, chat,
 prompts and logs. Keep the CA beside it when `ca_file` is

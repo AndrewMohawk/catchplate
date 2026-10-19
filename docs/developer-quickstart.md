@@ -1,3 +1,5 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # Use the access your operator gave you
 
 You need a private Catchplate client configuration, its verified public CA,
@@ -20,7 +22,29 @@ environment-variable examples:
 
 During the [Catchplate rename](catchplate-rename.md), the retained main instance
 still serves Serverware. Keep its existing downloads and matching client release
-together: checking out renamed source does not migrate that server. Renamed
+together: checking out renamed source does not migrate that server. For that
+retained instance, use the [Serverware-compatible client examples at
+`00ddd0ef`](https://github.com/AndrewMohawk/catchplate/tree/main/examples),
+the last commit before the protocol/package rename. Do not follow a moving
+`main` example link for those downloads: the newer clients use different
+placeholder names, even if the provider SDK and command look the same.
+
+If you already have this repository locally, create a separate client checkout
+without switching your current worktree or changing the server:
+
+```sh
+git worktree add --detach ../catchplate-serverware-clients 00ddd0ef84812286d9046cc7073281939e4f4261
+cd ../catchplate-serverware-clients
+```
+
+A shallow checkout may need `git fetch origin 00ddd0ef84812286d9046cc7073281939e4f4261`
+first. Use the selected example's README in **that checkout**, including its
+Serverware variable names, with the unmodified downloaded JSON and CA. Do not
+run server installation or migration commands from this client checkout. For
+an already migrated Catchplate instance, use the matching Catchplate release
+instead, not this compatibility snapshot.
+
+Renamed
 isolated/sandbox checks are not a completed main-instance cutover. Only after
 your operator confirms the corresponding server/permission migration, use the
 scoped [local converter](../examples/client-config-migration.md) for supported

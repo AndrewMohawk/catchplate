@@ -543,7 +543,7 @@ function createConnectView(workspace, applications, proxy) {
     element('connect-credential-next').textContent = newGithubApp() ? 'Save and verify GitHub App' : newCredential ? saveOnly ? 'Save credential' : 'Save credential & continue' : 'Use saved credential';
     element('connect-credential-next').disabled = connectionMethod === 'common' && !commonPreset() || connectionMethod === 'github' && !githubCreationAvailable() ||
       !newCredential && !catalog()?.credentials.some(item => item.id === element('connect-credential-choice').value && item.status === 'active');
-    element('connect-application-next').textContent = newApp ? 'Create client and show token' : 'Use this client';
+    element('connect-application-next').textContent = newApp ? 'Create client & continue' : 'Use this client';
     element('connect-application-proxy-default').textContent = newApplicationProxyAuthentication(catalog()).proxy_authentication ?
       'Proxy login: public application ID as username, this app’s token as password. Bearer also remains supported. Never use the provider key.' :
       'Proxy login: Bearer application token. Standard username/password login is not advertised by this deployment.';
@@ -606,6 +606,8 @@ function createConnectView(workspace, applications, proxy) {
   function renderSetup() {
     const rule = matchingRules().find(item => item.id === selectedRule);
     const provider = catalog()?.credentials.find(item => item.id === selectedCredential);
+    element('connect-handoff-summary').textContent = application() && rule ?
+      'Client: ' + application().name + ' · Credential: ' + (provider?.name || 'Unavailable') + ' · Permission: ' + rule.name : '';
     element('connect-provider-status').textContent = (!provider ? 'Provider status is unavailable; refresh saved state.' :
       provider.auth_type === 'google_oauth' ? provider.status === 'quarantined' ?
         'Google account: quarantined and unavailable for use. Provider revocation is not proven. This setup does not start consent or cleanup.' :
@@ -616,6 +618,7 @@ function createConnectView(workspace, applications, proxy) {
         'Provider key: stored, not tested here.') +
       ' Application token: separate expiry. Rule: usable only after the proxy confirms the saved policy.';
     const active = writable() && activePair() && workspace.loaded() && rule?.enforcement === 'active' && application()?.access_status === 'active' && supported(rule);
+    element('connect-setup-title').textContent = active ? 'Save your files and connect the client' : 'Confirm access before connecting';
     element('connect-activation').textContent = active ? 'Rule active in the proxy. Configure your client below; no upstream request has been tested here.' :
       !catalog() ? 'Status unavailable. Refresh saved state before using this setup.' : !activePair() || !rule ?
         'A selected credential, app token or rule is no longer available. Return to your choices or explicitly rotate an expired token in Clients.' :
@@ -640,6 +643,7 @@ function createConnectView(workspace, applications, proxy) {
       document.title = element('connect-title').textContent + ' - Catchplate operator workspace';
     }
     applications.mount(open && !saveOnly ? element('connect-token-slot') : null);
+    element('connect-token-details').hidden = saveOnly || element('one-time-access').hidden;
     element('connect-credential-saved').hidden = !saved;
     element('connect-credential-saved-summary').textContent = savedItem ?
       savedItem.name + ' is saved in Credentials. Provider request success has not been tested here.' :
@@ -690,8 +694,10 @@ function createConnectView(workspace, applications, proxy) {
       'AWS ECR: save credentials in Credentials, choose Use with a client, and grant one exact account/region/repository/tag. Every staged image requires human approval before publication.' :
       'AWS credentials may be stored in Credentials. ECR publishing remains unavailable until the publication owner and matching proxy advertise readiness; a manual header key is not a substitute.';
     element('connect-use-saved').hidden = saveOnly;
+    element('connect-saved-entry').hidden = saveOnly || !catalog()?.credentials.some(item =>
+      item.status === 'active' && (!isAwsCredential(item) || ecrAvailable(catalog(), item)) && (includeDiagnostics || !diagnostics.credentials.has(item.id)));
     for (const id of ['connect-actions', 'connect-leave-help', 'connect-compatibility']) element(id).hidden = googleOpen;
-    if (saveOnly) element('connect-compatibility').hidden = true;
+    if (saveOnly || step === 4) element('connect-compatibility').hidden = true;
     steps.forEach((name, index) => { element('connect-' + name + '-step').hidden = saved || index !== step || saveOnly && index !== 0; });
     element('connect-progress').textContent = saveOnly ? saved ? 'Credential saved · no access granted' : 'Save a credential · no access granted' : (step + 1) + ' of 5 · ' + labels[step];
     element('connect-back').hidden = step === 0 || step === 4;
@@ -962,11 +968,20 @@ function createConnectView(workspace, applications, proxy) {
     element(id).addEventListener(event, () => { review = null; if (step === 3) step = 2; render(); });
   function renderCommonPicker() {
     const presets = catalog()?.capabilities?.common_apps?.presets || [];
-    element('connect-common-app-picker').hidden = !presets.length;
+    element('connect-common-app-picker').hidden = !catalog();
     const query = element('connect-common-search').value.trim().toLowerCase(), category = element('connect-common-category').value;
-    const visible = presets.filter(item => (!query || [item.label, item.description, ...item.operations.map(op => op.label)].join(' ').toLowerCase().includes(query)) &&
+    let standardMatches = 0;
+    for (const [id, keywords] of [['connect-google', 'google gmail oauth account'], ['connect-use-github', 'github app personal access token pat issues'],
+      ['connect-use-npm', 'npm packages registry token'], ['connect-use-x', 'x twitter username lookup bearer'],
+      ['connect-x-account', 'x twitter oauth account text posting'], ['connect-use-alchemy', 'alchemy ethereum chain status'],
+      ['connect-use-key', 'manual custom api key bearer header']]) {
+      const button = element(id), matched = category !== 'ai' && (!query || keywords.includes(query));
+      button.setAttribute('data-provider-filtered', String(!matched));
+      if (matched && !button.hidden) standardMatches++;
+    }
+    const visible = presets.filter(item => (!query || [item.id, item.label, item.description, ...item.operations.map(op => op.label)].join(' ').toLowerCase().includes(query)) &&
       (category === 'all' || (['openai', 'anthropic', 'gemini', 'openrouter'].includes(item.id) ? 'ai' : 'services') === category));
-    element('connect-common-empty').hidden = visible.length > 0;
+    element('connect-common-empty').hidden = visible.length + standardMatches > 0;
     element('connect-common-apps').replaceChildren(...visible.map(item => {
       const button = textNode('button', item.label, 'secondary'); button.type = 'button'; button.dataset.commonApp = item.id;
       button.title = item.description + (item.destination_allowed ? '' : ' · Destination approval required in Proxy setup.');
@@ -994,6 +1009,7 @@ function createConnectView(workspace, applications, proxy) {
     if (method === 'saved') { connectionMethod = method; element('connect-credential-choice').value = ''; }
     else chooseCredentialTemplate({method, ...(method === 'github' ? {githubType: element('connect-github-type').value} : {})});
     render(); if (method !== 'saved') focusCredentialSecret();
+    else element('connect-credential-choice').focus();
   });
   element('connect-method-change').addEventListener('click', () => {
     if (step !== 0 || !['key', 'github', 'npm', 'x', 'alchemy', 'common', 'saved'].includes(connectionMethod) || !writable() || checkpoint) return;
@@ -1013,6 +1029,7 @@ function createConnectView(workspace, applications, proxy) {
     selectedCredential = ''; selectedApplication = ''; selectedRule = ''; review = null; checkpoint = null; savedCredential = '';
     includeDiagnostics = false;
     connectionMethod = null; selectedCommonApp = ''; savedChoice = ''; beforeGoogle = null;
+    element('connect-common-search').value = ''; element('connect-common-category').value = 'all';
     for (const id of ['connect-credential-form', 'connect-application-form', 'connect-access-form']) element(id).reset();
     for (const id of ['connect-credential-choice', 'connect-application-choice', 'connect-rule-choice']) element(id).value = 'new';
     for (const id of ['connect-response-mode', 'connect-request-body-mode', 'connect-operation']) element(id).value = '';

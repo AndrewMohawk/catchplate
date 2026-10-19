@@ -93,6 +93,7 @@ class Node {
   }
   setCustomValidity(message) { this.invalid = message; }
   scrollIntoView() {}
+  focus() { this.focused = true; } // Browser fixtures separately verify actual focus.
   descendants() { return this.children.flatMap(node => [node, ...node.descendants()]); }
   querySelectorAll(selector) {
     const selectors = selector.split(',').map(value => value.trim());

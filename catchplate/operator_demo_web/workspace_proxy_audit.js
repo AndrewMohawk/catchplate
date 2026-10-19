@@ -193,6 +193,7 @@ function createProxyView(workspace, applications) {
       const prepared = operatorGmailSdkCompatible(rule, catalog) ||
         applicationProxyAuthentication(application) === 'basic_and_bearer_v1' && operatorFileProfiles(rule).length > 0;
       element('client-advanced-template').open = Boolean(rule && !prepared);
+      element('client-connection-details').open = Boolean(rule && !prepared && !isEcrRule(rule));
       templateContext = nextTemplateContext;
     }
     if (isEcrRule(rule) && application) {
@@ -613,6 +614,8 @@ function createProxyView(workspace, applications) {
     if (container) container.append(content);
     else home.insertBefore(content, element('proxy-operator-settings'));
     for (const id of ['proxy-application', 'proxy-rule']) element(id).disabled = Boolean(container);
+    for (const id of ['client-selection', 'client-journey-steps', 'client-existing-handoff', 'client-readiness'])
+      element(id).hidden = Boolean(container);
   }
   workspace.subscribe(render); return {render, select, selectClient, mount};
 }

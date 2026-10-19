@@ -53,11 +53,17 @@ common-app `request.py` configuration.
 | Other common-app presets | [Requests example](../examples/common-apps/README.md), using `.venv`. It implements supported operations, not arbitrary provider APIs. |
 | AWS ECR image publication | [Boto3 example](../examples/ecr-publish-python/README.md): stage, review, explicitly publish. It is not Docker push. |
 
-In **Proxy setup → Connect a client**, select your client and permission first.
+If you just finished guided setup, stay on its final screen: your exact client
+and permission are already selected, and the private config and CA downloads
+are together. When returning through **Proxy setup → Connect a client**, select
+your client and permission first; a reload cannot recover a one-time token.
 Under **Run a prepared example**, choose a language/runtime to see
 one exact project directory, preparation command and run command. Gmail has its
 own **Gmail SDK language** selector. Run Python through the displayed virtual
 environment, not an unrelated system Python.
+
+You do not need the collapsed **Proxy connection details and manual setup**
+section for a file-based example. It remains available for your own HTTP client.
 
 For Go, download modules and build **once before providing credentials**. The
 prepared-binary handoff uses these names:

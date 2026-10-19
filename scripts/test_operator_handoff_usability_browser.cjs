@@ -43,6 +43,7 @@ async function run(browser) {
     assert.match(await status(page).innerText(), /no longer holds this client’s one-time token/);
     assert.equal(await status(page).getAttribute('data-state'), 'unavailable');
     assert.equal(await page.locator('#client-advanced-template').evaluate(node => node.open), false);
+    assert.equal(await page.locator('#client-connection-details').evaluate(node => node.open), false, 'SDK setup leads with files, not manual proxy fields');
     assert(await page.locator('#provider-config-command').isVisible());
     assert(!(await page.locator('#copy-provider-config-command').isDisabled()), 'public command does not need recovered token');
     for (const width of [1280, 390]) {
@@ -97,6 +98,10 @@ async function run(browser) {
     assert.equal(await page.locator('#proxy-rule').inputValue(), '55555555-5555-4555-8555-555555555555');
     assert(!(await page.locator('#download-config').isDisabled()), 'returning to client setup preserves exact-client download');
     assert.equal(await page.locator('#client-advanced-template').evaluate(node => node.open), true, 'manual HTTP workflow remains visible');
+    assert.equal(await page.locator('#client-connection-details').evaluate(node => node.open), true, 'manual HTTP exposes its required connection fields');
+    await page.locator('#client-connection-details > summary').click();
+    await refresh(page, state);
+    assert.equal(await page.locator('#client-connection-details').evaluate(node => node.open), false, 'refresh preserves a deliberate collapse');
     await page.locator('#proxy-application').selectOption(IDS.application);
     assert(await page.locator('#download-config').isDisabled(), 'another client’s held token is not reused');
     assert.match(await status(page).innerText(), /no longer holds this client’s one-time token/);

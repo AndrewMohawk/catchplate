@@ -29,8 +29,8 @@ For Google, use the offered consent flow instead of pasting access or refresh to
 
 1. On the saved credential, choose **Use with a client**, or choose **Set up access for a client** from the saved receipt.
 2. Select an existing client, or create one named after the workload, such as `Issue triage worker`.
-3. For a new client, choose an appropriate token lifetime and save the token privately when it is shown once. The default is 30 days; available lifetimes range from one hour to 90 days.
-4. Keep the page open until you have downloaded the client configuration in step 4 below. Then use the explicit save-and-clear action. Reloading cannot recover the token.
+3. For a new client, choose an appropriate token lifetime and choose **Create client & continue**. The default is 30 days; available lifetimes range from one hour to 90 days.
+4. Keep this tab open: it holds the one-time token for the final private configuration download. You do not need to copy the raw token separately. The **One-time client token** disclosure lets you inspect or save it manually. After saving the configuration safely, use its explicit save-and-clear action. Reloading cannot recover the token.
 
 Selecting a saved credential reuses its exact identity; you do not need to reenter the provider secret. Several clients can share a credential while keeping separate tokens and permissions. Creating a client identity alone grants no access.
 
@@ -45,12 +45,16 @@ For supported JSON jobs, you do not need request/response field lists unless you
 
 ## 4. Configure the actual client
 
-1. Open **Proxy setup** and select the client and permission.
-2. Copy the advertised proxy endpoint; the console address is not the forward proxy.
-3. Choose **Download CA certificate**. Trust this public CA only in the intended client, with TLS verification still enabled.
-4. Select the matching recipe or connection template. For the supplied SDK examples, prepare dependencies using that project's README before supplying the client token.
-5. Choose **Download private client config** while the page still holds the matching token. Use the complete download for the selected permission, not only its nested recipe. The supplied GitHub, Gmail, npm, Alchemy, X and common-app clients accept it with `--config /path/catchplate-client.private.json`; the file supplies the proxy login and scope without retyping them.
-6. Keep the CA at the path specified by `ca_file`; relative paths start beside the JSON. The public CA is not the provider key. If the proxy needs a separate private outer CA, supply it separately and choose a compatible client.
+1. Stay on setup's final screen. Its summary identifies the exact client, credential and permission you just reviewed; you do not need to select them again. If returning later, use **Proxy setup → Connect a client** and choose them there.
+2. Choose the adjacent **Download private client config** and **Download CA certificate** actions while this tab still holds the matching token. Keep both files together and verify the public CA with your operator. Trust it only in the intended client, with TLS verification enabled.
+3. Under **Run a prepared example**, choose a language/runtime and follow the matching preparation and run commands. Gmail has its own language selector. Install dependencies before supplying the private configuration. The supplied GitHub, Gmail, npm, Alchemy, X and common-app clients accept the complete download with `--config /path/catchplate-client.private.json`; do not extract only its nested recipe.
+4. Keep the CA at the path specified by `ca_file`; relative paths start beside the JSON. If the proxy needs a separate private outer CA, supply it separately and choose a compatible client.
+
+The file already supplies the proxy endpoint, client login and permitted scope;
+you do not need to retype them. **Proxy connection details and manual setup**
+contains the endpoint and login guidance if you are configuring your own HTTP
+client. The console address is not the forward proxy, and the public CA is not
+the provider key.
 
 **Download private client config** is available only while the page holds the matching one-time token. The download contains that token: keep it private and out of Git. A copied recipe or downloaded config does not execute a request.
 

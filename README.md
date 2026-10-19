@@ -62,9 +62,11 @@ credential yet, follow that guide or [provider setup](docs/wiki/Credentials-and-
 not the client-token workflow.
 
 To use it: choose **Use with a client**, select or create the client, and choose
-a scoped permission. Download its private client configuration and the public
-CA from **Proxy setup**, then run the matching example. A new client token is
-shown once: keep that page open until you have saved the configuration safely.
+a scoped permission. The final setup screen keeps those choices and offers the
+private client configuration and public CA together, followed by the matching
+example. For an existing handoff, use **Proxy setup → Connect a client**. Keep
+the setup tab open until you have saved the configuration safely: a new client
+token cannot be recovered after reloading, and copying it separately is optional.
 Never give the application the provider key.
 
 **Saved**, **policy active** and **request succeeded** are different checkpoints.

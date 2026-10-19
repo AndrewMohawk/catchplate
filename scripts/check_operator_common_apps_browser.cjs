@@ -71,15 +71,31 @@ async function run(browserPage) {
     } catch (error) { state.errors.push(error.message); return route.abort(); }
   });
   const page = await context.newPage(); page.setDefaultTimeout(5000);
+  const layout = [];
   page.on('pageerror', error => state.errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error' && !message.text().includes('404')) state.errors.push(message.text()); });
   try {
     await page.goto(ORIGIN, {waitUntil: 'networkidle'});
     await page.locator('#overview-connect-service').click();
+    assert(await page.locator('#connect-saved-entry').isHidden(), 'fresh setup offers no empty saved-credential detour');
     assert.equal(await page.locator('[data-common-app]').count(), 12);
     await page.locator('#connect-common-category').selectOption('ai'); assert.equal(await page.locator('[data-common-app]').count(), 4);
+    assert.equal(await page.locator('#connect-provider-buttons button:visible').count(), 0, 'AI category also filters standard providers');
     await page.locator('#connect-common-search').fill('claude'); assert.equal(await page.locator('[data-common-app]').count(), 1);
     await page.locator('#connect-common-search').fill(''); await page.locator('#connect-common-category').selectOption('all');
+    for (const [query, id] of [['github', 'connect-use-github'], ['npm', 'connect-use-npm'], ['manual', 'connect-use-key']]) {
+      await page.locator('#connect-common-search').fill(query);
+      assert(await page.locator('#' + id).isVisible(), 'search includes ' + query);
+      assert.equal(await page.locator('#connect-provider-buttons button:visible').count(), 1);
+      assert(await page.locator('#connect-common-empty').isHidden());
+    }
+    await page.locator('#connect-common-search').fill('no-such-provider');
+    assert(await page.locator('#connect-common-empty').isVisible());
+    assert.equal(await page.locator('#connect-provider-buttons button:visible').count(), 0);
+    assert.equal(await page.locator('[data-common-app]').count(), 0);
+    assert.equal(state.posts.length, 0, 'provider discovery never saves or grants');
+    await page.locator('#connect-common-search').fill('');
+    await page.evaluate(() => scrollTo(0, 0));
     await page.screenshot({path: join(directory, 'apps-desktop.png'), fullPage: true});
     await page.setViewportSize({width: 390, height: 844});
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
@@ -93,11 +109,25 @@ async function run(browserPage) {
     assert.equal(await page.locator('#connect-credential-secret').inputValue(), '');
     await page.locator('#connect-application-name').fill('Release job'); await page.locator('#connect-application-next').click();
     await page.locator('#connect-access-step').waitFor({state: 'visible'});
+    assert.equal(await page.locator('#client-token').inputValue(), TOKEN, 'one-time token remains in memory for the final download');
+    assert(await page.locator('#connect-token-details > summary').isVisible());
+    assert.equal(await page.locator('#connect-token-details').evaluate(node => node.open), false);
+    assert(await page.locator('#client-token').isHidden(), 'copying the raw token is optional');
     await page.locator('#connect-common-scope-channel').fill('C0123456789');
     assert(!await page.locator('#connect-approval-required').isDisabled()); await page.locator('#connect-approval-required').check();
     await page.locator('#connect-review').click(); await page.locator('#connect-review-step').waitFor({state: 'visible'});
     assert((await page.locator('#connect-review-step').textContent()).includes('C0123456789'));
     await page.locator('#connect-grant').click(); await page.locator('#connect-setup-step').waitFor({state: 'visible'});
+    assert.equal(await page.locator('#proxy-application').inputValue(), IDS[1]);
+    assert.equal(await page.locator('#proxy-rule').inputValue(), IDS[2]);
+    assert(await page.locator('#client-selection').isHidden(), 'wizard does not repeat already reviewed selections');
+    assert.match(await page.locator('#connect-handoff-summary').innerText(), /Client: Release job · Credential: Deployment bot · Permission:/);
+    assert.equal(await page.locator('#client-connection-details').evaluate(node => node.open), false);
+    assert.match(await page.locator('#provider-config-command').innerText(), /\.venv-services\/bin\/python -I -B services_python.py --config/);
+    await page.locator('#client-example-runtime').selectOption('http');
+    assert.match(await page.locator('#provider-config-command').innerText(), /\.venv\/bin\/python -I -B request.py --config/);
+    assert.match(await page.locator('#provider-config-note').innerText(), /--execute-write/);
+    assert.equal(state.posts.length, 3, 'example choices do not execute a request');
     assert((await page.locator('#client-command').textContent()).includes('"channel":"C0123456789"'));
     const downloaded = page.waitForEvent('download'); await page.locator('#download-config').click();
     const download = await downloaded; const config = JSON.parse(readFileSync(await download.path(), 'utf8'));
@@ -106,11 +136,42 @@ async function run(browserPage) {
     assert.equal(config.proxy_password, TOKEN); assert.equal(config.request_headers.Authorization, 'Bearer catchplate-slack-placeholder-v1');
     assert(!JSON.stringify(config).includes(SECRET)); assert.deepEqual(config.request_query, {});
     assert(config.note.includes('never automatic write intent')); assert.equal(state.posts.length, 3);
-    await page.screenshot({path: join(directory, 'setup-mobile.png'), fullPage: true});
-    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    for (const width of [390, 1280]) {
+      await page.setViewportSize({width, height: 960}); await page.evaluate(() => scrollTo(0, 0));
+      const dimensions = await page.evaluate(() => {
+        const rect = id => document.getElementById(id).getBoundingClientRect();
+        return {setupHeight: rect('connect').height, downloadY: rect('download-config').y,
+          caY: rect('ca-download').y, detailsY: rect('client-connection-details').y,
+          sameDownloadGroup: document.getElementById('download-config').parentElement === document.getElementById('ca-download').parentElement,
+          overflow: document.documentElement.scrollWidth > innerWidth};
+      });
+      assert(dimensions.sameDownloadGroup && dimensions.downloadY < dimensions.detailsY && dimensions.caY < dimensions.detailsY);
+      assert(!dimensions.overflow); layout.push({width, ...dimensions});
+      await page.screenshot({path: join(directory, 'setup-' + (width === 390 ? 'mobile' : 'desktop') + '.png'), fullPage: true});
+    }
+    await page.locator('#client-connection-details > summary').click();
+    assert(await page.locator('#proxy-url').isVisible(), 'manual connection details are still accessible');
+    await page.locator('#connect-status-refresh').click(); await page.waitForLoadState('networkidle');
+    assert.equal(await page.locator('#client-connection-details').evaluate(node => node.open), true, 'refresh preserves explicit expansion');
+    await page.evaluate(() => { location.hash = 'proxy'; });
+    await page.locator('#client-selection').waitFor({state: 'visible'});
+    assert.equal(await page.locator('#proxy-application').inputValue(), IDS[1]);
+    assert.equal(await page.locator('#proxy-rule').inputValue(), IDS[2]);
+    assert(!await page.locator('#download-config').isDisabled());
+    assert.equal(await page.locator('#client-token').inputValue(), TOKEN);
+    await page.evaluate(() => { location.hash = 'connect'; });
+    await page.locator('#connect-setup-step').waitFor({state: 'visible'});
+    page.once('dialog', dialog => dialog.accept()); await page.locator('#connect-start-over').click();
+    await page.locator('#connect-saved-entry').waitFor({state: 'visible'});
+    const saved = await page.locator('#connect-saved-entry').boundingBox(), search = await page.locator('#connect-common-search').boundingBox();
+    assert(saved.y < search.y, 'saved access is offered before browsing new providers');
+    await page.locator('#connect-use-saved').focus(); await page.keyboard.press('Enter');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'connect-credential-choice');
+    assert.equal(await page.locator('#client-token').inputValue(), TOKEN, 'starting another draft never clears held access');
+    assert.equal(state.posts.length, 3, 'navigation and reuse choice create nothing');
     assert.deepEqual(state.errors, []);
     return {ok: true, scope: 'intercepted synthetic desktop/mobile setup and private-config download',
-      providers: 12, posts: state.posts.length, providerRequests: 0, screenshots: directory};
+      providers: 12, posts: state.posts.length, providerRequests: 0, layout, screenshots: directory};
   } catch (error) {
     await page.screenshot({path: join(directory, 'failure.png'), fullPage: true});
     throw new Error(error.message + '\n' + JSON.stringify({errors: state.errors, screenshots: directory,

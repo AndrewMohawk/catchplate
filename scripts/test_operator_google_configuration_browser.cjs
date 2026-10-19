@@ -8,7 +8,8 @@ const {createHash} = require('node:crypto');
 const {readFile, readdir, mkdtemp} = require('node:fs/promises');
 const {join, resolve} = require('node:path');
 const {fixture: ordinaryFixture} = require('./test_operator_ordinary_modes_browser.cjs');
-const {ready, view, NOW} = require('./test_operator_catalog_browser.cjs');
+const {ready, view: navigateView, NOW} = require('./test_operator_catalog_browser.cjs');
+const view = (page, name) => navigateView(page, name === 'proxy' ? 'proxy-operator-settings' : name);
 
 const ROOT = resolve(__dirname, '..');
 const ORIGIN = 'https://operator-catalog.example.test';
@@ -284,9 +285,9 @@ async function reloadUnresolved(page) {
   assert(await hint.isVisible(), 'Overview explains the Google-only hold before navigation');
   assert.match(await hint.innerText(), /Google.*Proxy setup.*Google provider settings.*Check operation result/);
   const recovery = page.locator('#google-configuration-recovery-link');
-  assert.equal(await recovery.getAttribute('href'), '#proxy');
+  assert.equal(await recovery.getAttribute('href'), '#google-configuration-panel');
   await recovery.click();
-  await page.waitForFunction(() => location.hash === '#proxy' && !document.querySelector('#proxy').hidden);
+  await page.waitForFunction(() => location.hash === '#google-configuration-panel' && !document.querySelector('#proxy').hidden);
   await page.waitForFunction(() => !document.querySelector('#google-configuration-check').disabled &&
     document.querySelector('#credential-fields').disabled && document.querySelector('#load-error').hidden);
   assert.equal((await page.locator('#proxy-url').innerText()).trim(), 'https://proxy.example.test');
@@ -311,7 +312,7 @@ async function check(page) {
 }
 async function refreshCatalog(page) {
   const loaded = page.waitForResponse(response => response.url() === ORIGIN + '/api/operator-demo/catalog');
-  await page.locator('#proxy-refresh').click(); await (await loaded).finished(); await settled(page);
+  await page.locator('#proxy-settings-refresh').click(); await (await loaded).finished(); await settled(page);
 }
 const tests = [
   ['opening settings is inert; unsupported and externally configured profiles preserve static UI', async browser => {
@@ -506,19 +507,20 @@ const tests = [
       await page.reload({waitUntil: 'networkidle'});
       const response = await loaded; assert.equal(response.status(), 200); await response.finished();
       await page.waitForFunction(() => document.querySelector('#load-error').hidden &&
-        document.querySelector('#credential-fields').disabled && !document.querySelector('#mutation-review-confirm').disabled);
+        document.querySelector('#credential-fields').disabled);
+      // The provider owner holds the workspace until its exact operation is
+      // checked. The shared acknowledgement must not bypass that hold.
+      assert(await page.locator('#mutation-review-confirm').isDisabled());
       assert.equal(await page.title(), 'Overview - Catchplate operator workspace');
       assert(await page.locator('#overview').isVisible()); assert(await page.locator('#proxy').isHidden());
       assert(await page.locator('#mutation-review').isVisible());
       assert(await node(page, 'recovery-hint').isVisible());
       assert.match(await node(page, 'recovery-hint').innerText(), /Google provider configuration needs a status check/);
-      assert.equal(await node(page, 'recovery-link').getAttribute('href'), '#proxy');
+      assert.equal(await node(page, 'recovery-link').getAttribute('href'), '#google-configuration-panel');
       assert.equal(await node(page, 'recovery-link').innerText(), 'Check Google configuration result');
       assert.deepEqual(await noMaterial(page), reference);
       assert.equal(observed.requests.length, beforeReload, 'restoring the reference never auto-checks or resubmits');
-      // Confirmation cannot clear the unresolved provider hold. The normal
-      // controller may emit again, but no request or mutation is authorized.
-      await page.locator('#mutation-review-confirm').click();
+      // Recovery uses the provider-specific Check, not a generic acknowledgement.
       assert(await page.locator('#credential-fields').evaluate(fieldset => fieldset.disabled === true));
       assert(await page.locator('#credential-add').isDisabled());
       assert(await page.locator('#mutation-review').isVisible());
@@ -529,7 +531,7 @@ const tests = [
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
       activeStep = 'retained-reference-fixed-recovery-link';
       await node(page, 'recovery-link').click(); await page.locator('#proxy').waitFor({state: 'visible'});
-      assert.equal(new URL(page.url()).hash, '#proxy');
+      assert.equal(new URL(page.url()).hash, '#google-configuration-panel');
       assert.equal(await page.locator('nav a[href="#proxy"]').getAttribute('aria-current'), 'page');
       assert.equal(await page.locator('.page:visible').count(), 1);
       assert(await node(page, 'panel').isVisible()); assert(!await node(page, 'check').isDisabled());

@@ -55,6 +55,7 @@ function buildCurlCommand({proxyUrl, upstreamUrl, method, caPath, allowedHeaders
 
 if (typeof module !== 'undefined' && module.exports) module.exports = {buildCurlCommand, clientCredentialInput, credentialHeaderTarget};
 else {
+  const navigation = createWorkspaceNavigation();
   initializeCredentialGuides();
   const browserStateMigration = migrateLegacyOperatorBrowserState();
   const workspace = createOperatorWorkspace(browserStateMigration);
@@ -63,6 +64,8 @@ else {
     'An earlier Serverware recovery marker could not be transferred safely. Changes are blocked; keep this tab and review the recovery guidance below.' :
     'This tab’s earlier Serverware operation references were retained for Catchplate. Unresolved operations still need review; no request was retried.';
   if (browserStateMigration.blocked) element('browser-recovery-guide').open = true;
+  if (!browserStateMigration.blocked && !browserStateMigration.migrated)
+    document.querySelector('footer').prepend(element('browser-recovery-guide'));
   let reauthorization; let xAccounts; let connect; let proxy;
   const configureClient = (applicationId, ruleId) => {
     if (workspace.state.busy || workspace.state.uncertain) return false;
@@ -100,6 +103,7 @@ else {
     let view = location.hash.slice(1) || (approvalLocation ? 'pending-actions' : 'overview');
     const proxyTarget = ['proxy-operator-settings', 'proxy-upstreams', 'google-configuration-panel', 'x-configuration-panel'].includes(view) ? view : null;
     if (proxyTarget) view = 'proxy';
+    const administratorSettings = view === 'proxy' && proxyTarget !== null;
     if (view === 'main-content') { element('main-content').focus(); return; }
     if (!Object.hasOwn(operatorViews, view)) { view = 'overview'; history.replaceState(null, '', '#overview'); }
     for (const name of Object.keys(operatorViews)) {
@@ -109,16 +113,22 @@ else {
     }
     element('page-label').textContent = operatorViews[view]; document.title = operatorViews[view] + ' - Catchplate operator workspace';
     connect.show(view === 'connect');
+    element('proxy-operator-settings').hidden = !administratorSettings;
+    element('proxy-setup-content').hidden = administratorSettings;
+    for (const [id, selected] of [['proxy-client-tab', !administratorSettings], ['proxy-settings-tab', administratorSettings]]) {
+      if (selected) element(id).setAttribute('aria-current', 'page'); else element(id).removeAttribute('aria-current');
+    }
     notifications.show(view === 'notifications');
     pendingActions.show(view === 'pending-actions', {requestedId: approvalLocation?.id,
       invalidLink: approvalLocation?.invalid === true});
     ecrPublications.show(view === 'pending-actions');
-    upstreams.show(view === 'proxy');
-    googleConfiguration.show(view === 'proxy');
-    xConfiguration.show(view === 'proxy');
+    upstreams.show(administratorSettings);
+    googleConfiguration.show(administratorSettings);
+    xConfiguration.show(administratorSettings);
     if (view === 'audit') audit.open();
     if (view === 'overview') renderOverviewAction(workspace.state.catalog);
-    if (proxyTarget) requestAnimationFrame(() => element(proxyTarget).scrollIntoView({block: 'start'}));
+    navigation.changed(view);
+    if (proxyTarget && proxyTarget !== 'proxy-operator-settings') requestAnimationFrame(() => element(proxyTarget).scrollIntoView({block: 'start'}));
   }
   // The retained #connect route is an action, not a second resource inventory.
   // Explicit links open access setup; the credential editor selects save-only
@@ -226,7 +236,7 @@ else {
     renderOverviewAction(catalog);
     if (location.hash === '#audit') audit.open();
   });
-  for (const id of ['retry-load', 'credentials-refresh', 'applications-refresh', 'rules-refresh', 'proxy-refresh'])
+  for (const id of ['retry-load', 'credentials-refresh', 'applications-refresh', 'rules-refresh', 'proxy-refresh', 'proxy-settings-refresh'])
     element(id).addEventListener('click', () => workspace.refresh({manual: true}));
   window.addEventListener('hashchange', navigate);
   navigate(); workspace.refresh();

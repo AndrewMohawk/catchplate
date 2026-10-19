@@ -262,6 +262,15 @@ async function ready(page) {
     !document.querySelector('#mutation-review-refresh').disabled);
 }
 async function view(page, name) {
+  const menu = page.locator('#workspace-menu-toggle');
+  if (await menu.isVisible() && await menu.getAttribute('aria-expanded') !== 'true') await menu.click();
+  if (name === 'proxy-operator-settings') {
+    await page.locator('nav a[href="#proxy"]').click();
+    await page.locator('#proxy-settings-tab').click();
+    await page.locator('#proxy-operator-settings').waitFor({state: 'visible'});
+    assert.equal(await page.locator('.page:visible').count(), 1);
+    return;
+  }
   if (name === 'connect') {
     await page.locator('nav a[href="#overview"]').click();
     await page.locator('#overview-connect-service').click();

@@ -96,6 +96,22 @@ class OperatorCatalogAssets(unittest.TestCase):
             self.assertEqual(index[name][0], 'section')
             self.assertTrue(any(tag == 'a' and attrs.get('href') == '#' + name for tag, attrs, _ in items))
 
+    def test_role_guidance_navigation_and_settings_are_separate(self):
+        document = operator_demo_portal.render()
+        index = {attrs['id']: (tag, attrs) for tag, attrs, _ in self.elements() if 'id' in attrs}
+        self.assertEqual(index['workspace-menu-toggle'][1]['aria-expanded'], 'false')
+        self.assertEqual(index['workspace-menu-toggle'][1]['type'], 'button')
+        for target in index['workspace-menu-toggle'][1]['aria-controls'].split():
+            self.assertIn(target, index)
+        self.assertEqual(index['overview-developer-action'][1]['href'], '#proxy')
+        self.assertEqual(index['proxy-settings-tab'][1]['href'], '#proxy-operator-settings')
+        self.assertIn('hidden', index['proxy-operator-settings'][1])
+        self.assertEqual(index['client-existing-settings'][0], 'details')
+        self.assertNotIn('open', index['client-existing-settings'][1])
+        self.assertLess(document.index('id="client-selection"'), document.index('id="ca-download"'))
+        self.assertLess(document.index('id="download-config"'), document.index('id="provider-config-handoff"'))
+        self.assertIn('No provider key or administrator account is needed', document)
+
     def test_mcp_help_is_a_static_local_client_guide_beside_private_config(self):
         document = operator_demo_portal.render()
         links = [(tag, attrs, form) for tag, attrs, form in self.elements() if attrs.get('id') == 'client-mcp-guide']

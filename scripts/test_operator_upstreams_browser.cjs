@@ -5,7 +5,8 @@ const assert = require('node:assert/strict');
 const {createHash} = require('node:crypto');
 const {readFile, readdir, mkdtemp} = require('node:fs/promises');
 const {join, resolve} = require('node:path');
-const {ready, view, credential, application, rule, NOW} = require('./test_operator_catalog_browser.cjs');
+const {ready, view: navigateView, credential, application, rule, NOW} = require('./test_operator_catalog_browser.cjs');
+const view = (page, name) => navigateView(page, name === 'proxy' ? 'proxy-operator-settings' : name);
 const {fixture: ordinaryFixture} = require('./test_operator_ordinary_modes_browser.cjs');
 const {review, receipt, OLD, TARGET, FIXTURE, NPM, digest} = require('./test_operator_upstreams_ui.cjs');
 const ROOT = resolve(__dirname, '..');
@@ -124,7 +125,9 @@ const tests = [
     assert.deepEqual(JSON.parse(copied), TARGET.allowed_upstreams); assert(!copied.includes('fixture_cidrs'));
     await screenshot(page, directory, 'destinations-prepared-desktop'); await page.setViewportSize({width: 390, height: 844});
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await screenshot(page, directory, 'destinations-prepared-mobile');
-    await view(page, 'applications'); assert.match(await page.locator('#applications-list').innerText(), /Token expired/);
+    await view(page, 'applications');
+    await page.locator('#applications-list details > summary').filter({hasText: 'Connection-check resources'}).click();
+    assert.match(await page.locator('#applications-list').innerText(), /Token expired/);
     assert(await page.locator('#one-time-access').isHidden()); assert.equal(observed.cancels.length, 0);
   })],
   ['lost prepared reply survives reload and recovers by GET before separate cancellation', browser => fixture(browser, {lostPrepare: true}, async (page, state, observed) => {
@@ -150,7 +153,7 @@ const tests = [
   ['catalog changes invalidate the reviewed CAS until explicitly reviewed again', browser => fixture(browser, {}, async (page, state, observed) => {
     await proposed(page); state.revision++;
     const loaded = page.waitForResponse(response => response.url() === ORIGIN + '/api/operator-demo/catalog');
-    await page.locator('#proxy-refresh').click(); await (await loaded).finished();
+    await page.locator('#proxy-settings-refresh').click(); await (await loaded).finished();
     await page.waitForFunction(() => document.querySelector('#upstreams-prepare').disabled);
     assert.match(await page.locator('#upstreams-review-state').innerText(), /Workspace state changed/); assert.equal(observed.prepares.length, 0);
     await page.locator('#upstreams-review').click(); await idle(page); assert(!await page.locator('#upstreams-prepare').isDisabled());

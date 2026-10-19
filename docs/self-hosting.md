@@ -70,7 +70,7 @@ the owner must recheck that exact operation against current saved state.
 For either restart, use the deployment's current reviewed configuration and
 backup procedure, not a command generated from the downloaded JSON. Keep ingress
 closed until retained-state checks and matching app/proxy policy readiness pass.
-Return to **Proxy setup**, refresh the exact operation, and distinguish
+Return to **Proxy setup → Administrator settings**, refresh the exact operation, and distinguish
 **activation recorded**, **proxy ready** and **provider request succeeded**.
 Changing credentials, clients or permissions after Prepare can stale its review;
 do not force activation or silently prepare it again.

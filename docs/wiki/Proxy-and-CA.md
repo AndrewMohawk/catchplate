@@ -6,7 +6,7 @@
 
 ## Configure a client, not the console URL
 
-Open **Proxy setup**, select the client and permission, and copy the displayed proxy endpoint/login settings. The retained browser console at `https://serverware.example.com/` and the forward proxy are different services. The Catchplate hostname cutover is pending; follow [rename status](../catchplate-rename.md) and do not rewrite an existing private configuration. Do not invent a port or use a private management address as the proxy.
+Open **Proxy setup → Connect a client**, select the client and permission, and copy the displayed proxy endpoint/login settings. **Administrator settings** is a separate view for destination and OAuth application configuration; it is not part of running a client. The retained browser console at `https://serverware.example.com/` and the forward proxy are different services. The Catchplate hostname cutover is pending; follow [rename status](../catchplate-rename.md) and do not rewrite an existing private configuration. Do not invent a port or use a private management address as the proxy.
 
 For **standard client login**, the username is the Catchplate client ID and the password is its expiring proxy token. Retained Bearer-only clients must use their advertised mode or be explicitly changed in **Clients**; a recipe does not silently migrate them. The token authenticates to Catchplate, not to GitHub, Google or npm.
 
@@ -14,10 +14,10 @@ Use the [provided client recipes](Clients-and-recipes.md), which separate proxy 
 
 ## Download and scope the public CA
 
-1. Sign in to the console and choose **Proxy setup → Download CA certificate**.
+1. Sign in to the console and choose **Proxy setup → Connect a client → Download CA certificate**.
 2. Save `catchplate-ca.pem` with the client configuration.
 3. Set the recipe's interception-CA path to that file.
-4. Keep TLS verification enabled. Do not use `curl -k`, disable SDK verification or install this development CA system-wide.
+4. Verify the certificate with your operator and scope trust to the intended client. Keep TLS verification enabled. Do not use `curl -k`, disable SDK verification or install the interception CA system-wide.
 
 There are two TLS checks:
 
@@ -32,7 +32,7 @@ The download contains no private CA signing key. Correct trust does not make an 
 
 The operator owns the approved destination list. A client permission cannot add an arbitrary host.
 
-1. Open **Proxy setup → Proxy destinations** and review the effective origins.
+1. Open **Proxy setup → Administrator settings → Destinations** and review the effective origins.
 2. Enter the proposed complete list and review additions/removals. Public entries are canonical HTTPS origins on port 443, without paths, URL credentials, queries, wildcards or literal IP addresses.
 3. Choose **Prepare change**. This records a reviewed target; it does not contact the provider or apply it live.
 4. Have the deployment owner perform the controlled paired restart using the exact prepared settings and retained-state procedure.

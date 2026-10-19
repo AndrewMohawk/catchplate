@@ -153,6 +153,8 @@ function createProxyView(workspace, applications) {
   }
   renderOperatorCompatibility('client-compatibility-content');
   function render() {
+    element('client-template-title').textContent = 'Client configuration';
+    element('client-template-warning').textContent = 'Choose your client and permission above to see the matching configuration and example. This page never sends a provider request.';
     command = ''; element('copy-command').disabled = true; element('download-config').disabled = true;
     handoffCommand = ''; element('copy-provider-config-command').disabled = true;
     renderOperatorExampleProjects(null, null);
@@ -239,8 +241,8 @@ function createProxyView(workspace, applications) {
     }
     const messageRead = gmail && !gmailSdk && element('gmail-client-operation').value === 'message';
     element('gmail-message-group').hidden = !messageRead;
-    element('client-template-title').textContent = xPost ? 'X · Text-post SDK setup' : npmInstall ? 'npm · Install/ci client setup' : alchemy ? 'Alchemy · Chain-status read template' : x ? 'X · Username lookup connection template' : npmPublish ? 'npm · Publish package' : npm ? 'npm · Read package metadata' : github ? 'GitHub · Octokit client recipe' : gmailSdk ? 'Gmail · Official ' + gmailProfile.label + ' SDK inbox job' : gmail ? 'Gmail client connection templates' : 'cURL connection template';
-    element('client-template-warning').textContent = xPost ?
+    element('client-template-title').textContent = !rule ? 'Client configuration' : xPost ? 'X · Text-post SDK setup' : npmInstall ? 'npm · Install/ci client setup' : alchemy ? 'Alchemy · Chain-status read template' : x ? 'X · Username lookup connection template' : npmPublish ? 'npm · Publish package' : npm ? 'npm · Read package metadata' : github ? 'GitHub · Octokit client recipe' : gmailSdk ? 'Gmail · Official ' + gmailProfile.label + ' SDK inbox job' : gmail ? 'Gmail client connection templates' : 'cURL connection template';
+    element('client-template-warning').textContent = !rule ? 'Choose your client and permission above to see the matching configuration and example. This page never sends a provider request.' : xPost ?
       'This recipe publishes only when you explicitly run it locally with reviewed text and post-once confirmation. ' + xPostQuotaSummary(rule) + ' This page sends no post; never automatically retry an uncertain reply.' : npmInstall ?
       'Review the exact dependency allowlist and local manifests before running the linked npm example. Installation writes only to your deliberately selected new output directory; lifecycle scripts stay disabled and default audit stays enabled. This page does not execute or verify the job.' : alchemy ?
       'Only the saved chain and two read methods are permitted. This cURL template posts a fixed JSON-RPC request to keyless /v2 with a public dummy. No request is executed here and this page does not prove provider entitlement.' : x ?

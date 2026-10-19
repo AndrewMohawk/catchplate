@@ -356,7 +356,7 @@ function createGoogleConfigurationView(workspace) {
     recoveryHint = textNode('p'); recoveryHint.id = 'google-configuration-recovery-hint';
     recoveryHint.append(textNode('span', message), ' ');
     const link = textNode('a', storageBlocked ? 'Review Google recovery status' : 'Check Google configuration result');
-    link.id = 'google-configuration-recovery-link'; link.href = '#proxy'; recoveryHint.append(link);
+    link.id = 'google-configuration-recovery-link'; link.href = '#google-configuration-panel'; recoveryHint.append(link);
     // Keep another owner's warning and hold intact. requireReview replaces only
     // its text paragraph, so this owner-scoped navigation survives later alerts.
     element('mutation-review').append(recoveryHint);

@@ -18,8 +18,9 @@ running as Catchplate with its retained state. See the [rename checklist](docs/c
 
 ## Start here
 
-- **Administrator:** [open the retained console](https://serverware.example.com/)
-  with the homelab sign-in, then follow [your first client](docs/wiki/Getting-started.md).
+- **Administrator:** open your instance's console and follow
+  [your first client](docs/wiki/Getting-started.md). Starting from scratch?
+  Use the [standalone installation guide](docker/catchplate-standalone/README.md).
 - **Developer:** already have a private client configuration and CA? Follow the
   [developer quickstart](docs/developer-quickstart.md) to run a matching example.
 - **AI agent:** use the [local MCP server](examples/mcp/README.md) with selected
@@ -31,6 +32,12 @@ running as Catchplate with its retained state. See the [rename checklist](docs/c
 The running instance is the product instance, not a separate demo. Opening it
 does not build the proxy, start a pilot or require a security-key ceremony.
 The versioned guides above work without a published GitHub Wiki.
+
+The console's Overview separates **Give an app access** for administrators
+from **Use the access you have** for developers. In **Proxy setup**, use
+**Connect a client** for configuration, CA and examples; use
+**Administrator settings** for destinations and provider OAuth applications.
+Developers with a private client config do not need access to the console.
 
 **Already given access?** You should receive a private client JSON, the public
 CA it references, and the exact permitted job/example. Use that example's

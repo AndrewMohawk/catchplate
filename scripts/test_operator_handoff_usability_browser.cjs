@@ -88,6 +88,14 @@ async function run(browser) {
     assert(!(await page.locator('#download-config').isDisabled()));
     assert.match(await status(page).innerText(), /^Ready to download/);
     assert.equal(await status(page).getAttribute('data-state'), 'available');
+    await page.locator('#proxy-settings-tab').click();
+    await page.locator('#proxy-operator-settings').waitFor({state: 'visible'});
+    await page.locator('#proxy-client-tab').click();
+    await page.locator('#client-selection').waitFor({state: 'visible'});
+    assert.equal(await page.locator('#client-token').inputValue(), held, 'view switch preserves the held one-time token');
+    assert.equal(await page.locator('#proxy-application').inputValue(), IDS.other);
+    assert.equal(await page.locator('#proxy-rule').inputValue(), '55555555-5555-4555-8555-555555555555');
+    assert(!(await page.locator('#download-config').isDisabled()), 'returning to client setup preserves exact-client download');
     assert.equal(await page.locator('#client-advanced-template').evaluate(node => node.open), true, 'manual HTTP workflow remains visible');
     await page.locator('#proxy-application').selectOption(IDS.application);
     assert(await page.locator('#download-config').isDisabled(), 'another client’s held token is not reused');

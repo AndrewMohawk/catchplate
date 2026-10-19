@@ -37,7 +37,7 @@ const CHECKER_MODULES = ['scripts.check_operator_guided', 'scripts.operator_guid
   'scripts.check_operator_ordinary_client', 'scripts.operator_catalog_feature_checks', 'scripts.run_ordinary_regression'];
 function need(value) { if (!value) throw new Error('Guided browser check refused'); }
 function applicationRevocationDialog(name, id) {
-  return `Revoke application "${name}" (${id}) and its 0 active access rules? This also cancels workload renewal and previous-token overlap. Shared provider credentials and other applications remain. Enforcement begins after the proxy loads the new policy; already-dispatched requests cannot be recalled.`;
+  return `Revoke client "${name}" (${id}) and its 0 active permissions? This also cancels workload renewal and previous-token overlap. Shared provider credentials and other clients remain. Enforcement begins after the proxy loads the new policy; already-dispatched requests cannot be recalled.`;
 }
 const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) &&
   Object.keys(value).sort().join(',') === [...keys].sort().join(',');

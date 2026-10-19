@@ -4,6 +4,19 @@
 
 Keep the credential, client and permission identities when changing only a secret. This avoids rebuilding assignments and makes the audit trail easier to follow.
 
+## Find saved access
+
+In **Credentials** or **Clients**, **Find saved…** jumps straight to the inventory.
+Each inventory, including **Permissions**, can be searched by name, related
+resource or public ID. Use **Show** to narrow the list to connection checks or
+revoked history. Matching retained groups expand while searching; **Clear filters**
+restores your normal grouped view. Filtering is local to this page and never
+changes access, calls a provider or retrieves a secret.
+
+**Permission loaded** means the proxy has loaded that saved permission, not that
+the provider connection is healthy. An expired client token needs replacement in
+**Clients**; you do not need to recreate its saved credential or permission.
+
 ## Replace a static provider key
 
 1. Obtain the replacement key through the provider's normal process.
@@ -82,12 +95,12 @@ Future TEE enforcement has a different trust boundary.
 | You want to stop… | Action | What remains |
 | --- | --- | --- |
 | One client operation | **Permissions → Revoke access rule** | The client and saved credential |
-| All access by one workload | **Clients → Revoke application** | Shared credentials and other clients |
+| All access by one workload | **Clients → Revoke client** | Shared credentials and other clients |
 | Future token renewal only | **Clients → Managed workload renewal → Cancel renewal enrollment** | The current token until its existing expiry, client identity and permissions |
 | Future local use of a provider credential | Remove referencing permissions, then **Credentials → Revoke credential** | Audit history; no claim of provider-side revocation |
 | A managed provider account connection | Use its explicit account disconnect review | Follow its result; local denial and provider cleanup are distinct |
 
-The current client-card button still says **Revoke application**; it refers to the Catchplate client, not a GitHub App. For policy changes, wait until revocation is enforced. Already-dispatched requests cannot be recalled. A local credential revoke does not uninstall a GitHub App or revoke a static key at its provider. [Resource lifecycle](https://github.com/AndrewMohawk/catchplate/blob/main/catchplate/operator_demo_web/workspace_resources.js), [client revocation](https://github.com/AndrewMohawk/catchplate/blob/main/catchplate/operator_demo_web/workspace_applications.js).
+**Revoke client** refers to the Catchplate client, not a GitHub App. For policy changes, wait until revocation is enforced. Already-dispatched requests cannot be recalled. A local credential revoke does not uninstall a GitHub App or revoke a static key at its provider. [Resource lifecycle](https://github.com/AndrewMohawk/catchplate/blob/main/catchplate/operator_demo_web/workspace_resources.js), [client revocation](https://github.com/AndrewMohawk/catchplate/blob/main/catchplate/operator_demo_web/workspace_applications.js).
 
 ## Review expiry and health separately
 

@@ -32,6 +32,7 @@ function createApplicationTokenInvalidations(onInvalidate) {
   return {connect, send, close};
 }
 function createApplicationsView(workspace, actions = {}) {
+  const inventory = createResourceInventory('applications-list', 'clients', {jump: true});
   const tokenHome = document.createComment('shared application token panel');
   element('one-time-access').before(tokenHome);
   let held = null; let expiryTimer;
@@ -191,9 +192,9 @@ function createApplicationsView(workspace, actions = {}) {
     element('application-proxy-default').textContent = newApplicationProxyAuthentication(catalog).proxy_authentication ?
       'New apps use standard proxy login: public application ID as username, application token as password. Bearer also remains supported. Never use the provider key.' :
       'New apps use Bearer proxy authentication. Standard username/password login is not advertised by this deployment.';
-    if (!catalog) return;
+    if (!catalog) { inventory.render(null); return; }
     const diagnostic = operatorDiagnosticResources(catalog);
-    renderResourceGroups('applications-list', catalog.applications.map(application => {
+    inventory.render(catalog.applications.map(application => {
       const revoked = application.status === 'revoked';
       const badge = revoked ? workspace.loaded() && application.access_status === 'revoked' ? 'Revoked · enforced' : 'Revoked · enforcement pending' :
         application.token_status === 'expired' || Date.now() >= application.token_expires_at_epoch_ms ? 'Token expired' :
@@ -209,6 +210,12 @@ function createApplicationsView(workspace, actions = {}) {
           'Login enforcement pending: wait for the exact saved policy to load.', 'small muted');
       loginStatus.dataset.applicationProxyStatus = ''; card.append(loginStatus);
       if (!revoked) {
+        const next = textNode('p', badge === 'Token expired' ?
+          'Next: replace this client’s token below and update its private configuration. Your saved provider credentials and permissions stay in place.' :
+          !application.active_rule_count ? 'Next: add a permission. A client token alone grants no provider access.' :
+          !workspace.loaded() ? 'Next: wait for the saved permission policy to load, then open Configure client.' :
+          'Next: open Configure client for its permissions and connection instructions.', 'small muted');
+        next.dataset.applicationNextStep = ''; card.querySelector('.metadata').before(next);
         const setup = textNode('div', undefined, 'actions');
         const configure = textNode('button', 'Configure client', 'secondary'); configure.dataset.action = 'configure-client';
         const permission = textNode('button', 'Add permission', 'secondary'); permission.dataset.action = 'add-permission';
@@ -228,7 +235,7 @@ function createApplicationsView(workspace, actions = {}) {
         select.value = rotationLifetimes.get(application.id) || '2592000'; select.disabled = workspace.state.busy || workspace.state.uncertain;
         select.addEventListener('change', () => rotationLifetimes.set(application.id, select.value));
         const rotate = textNode('button', 'Rotate client token', 'secondary'); rotate.dataset.action = 'rotate-application';
-        const revoke = textNode('button', 'Revoke application', 'secondary'); revoke.dataset.action = 'revoke-application';
+        const revoke = textNode('button', 'Revoke client', 'secondary'); revoke.dataset.action = 'revoke-application';
         rotate.disabled = revoke.disabled = workspace.state.busy || workspace.state.uncertain;
         rotate.addEventListener('click', async () => {
           const lifetime = Number(select.value); if (!validLifetime(lifetime)) return;
@@ -237,7 +244,7 @@ function createApplicationsView(workspace, actions = {}) {
           invalidate(application.id); await workspace.mutate('applications/rotate-token', {id: application.id, token_lifetime_seconds: lifetime}, 'application-action-status', hold);
         });
         revoke.addEventListener('click', async () => {
-          if (!window.confirm(`Revoke application "${application.name}" (${application.id}) and its ${application.active_rule_count} active access rules? This also cancels workload renewal and previous-token overlap. Shared provider credentials and other applications remain. Enforcement begins after the proxy loads the new policy; already-dispatched requests cannot be recalled.`)) return;
+          if (!window.confirm(`Revoke client "${application.name}" (${application.id}) and its ${application.active_rule_count} active permissions? This also cancels workload renewal and previous-token overlap. Shared provider credentials and other clients remain. Enforcement begins after the proxy loads the new policy; already-dispatched requests cannot be recalled.`)) return;
           invalidate(application.id); await workspace.mutate('applications/revoke', {id: application.id}, 'application-action-status');
         });
         card.append(textNode('p', 'Replacement token lifetime', 'small'), select); const tokenActions = textNode('div', undefined, 'actions'); tokenActions.append(rotate, revoke);
@@ -260,7 +267,9 @@ function createApplicationsView(workspace, actions = {}) {
           manage.addEventListener('click', () => { element('application-renewal').open = true; renewalView.select(application.id); }); card.append(manage);
         }
       }
-      return {card, group: revoked ? 'revoked' : diagnostic.applications.has(application.id) ? 'diagnostic' : 'current'};
+      return {card, keywords: catalog.access_rules.filter(rule => rule.application_id === application.id).flatMap(rule => [
+        rule.id, rule.name, rule.credential_id, catalog.credentials.find(item => item.id === rule.credential_id)?.name || '']),
+        group: revoked ? 'revoked' : diagnostic.applications.has(application.id) ? 'diagnostic' : 'current'};
     }), 'No current clients in the main list. Create a client and save its one-time token, or expand a retained group below to manage existing clients.');
   }
   window.addEventListener('pagehide', () => { clear(); invalidations.close(); });

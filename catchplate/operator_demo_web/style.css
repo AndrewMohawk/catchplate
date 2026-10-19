@@ -9,6 +9,9 @@ fieldset{margin:0;padding:0;border:0;min-width:0}label,legend{display:block;font
 .credential-guide-links{display:flex;flex-wrap:wrap;gap:8px 18px}.credential-guide-links a{font-weight:600;font-size:12px;min-height:24px}
 .credential-format-hint{margin-top:-6px;overflow-wrap:anywhere}
 #application-renewal-summary{overflow-wrap:anywhere}
+.resource-inventory{margin:0 0 20px;scroll-margin-top:20px}.inventory-controls{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr) auto;gap:12px;align-items:end}.inventory-controls input,.inventory-controls select{margin:0}.inventory-controls>div{min-width:0}.resource-inventory>[role=status]{margin:10px 0 0}.inventory-jump{margin:0 0 20px}
+[data-application-next-step],[data-rule-next-step]{margin:14px 0 0;padding:10px 12px;background:#f3f7f1;border-left:3px solid #b8cdbb;border-radius:4px}
+@media(max-width:800px){.inventory-controls{grid-template-columns:minmax(0,1fr) auto;align-items:end}.inventory-controls>div:first-child{grid-column:1/-1}.inventory-controls>button{padding-inline:12px}.inventory-controls select{font-size:12px}}
 .workspace-help{display:flex;flex-direction:column;gap:8px;margin-top:24px;font-size:12px}.workspace-help a{min-height:30px;display:flex;align-items:center}
 #client-config-availability{border-left:3px solid var(--green);padding-left:12px;overflow-wrap:anywhere}
 #client-config-availability[data-state=unavailable]{border-color:#dcaa45}

@@ -355,6 +355,7 @@ function createStaticKeyReplacementView(workspace) {
   return {open, render};
 }
 function createCredentialsView(workspace, actions = {}) {
+  const inventory = createResourceInventory('credentials-list', 'credentials', {includeExpired: true, jump: true});
   const replacement = createStaticKeyReplacementView(workspace);
   const githubAppReplacement = createGithubAppKeyReplacementView(workspace);
   const aws = createAwsCredentialsView(workspace);
@@ -417,7 +418,7 @@ function createCredentialsView(workspace, actions = {}) {
     githubAppReplacement.render();
     renderProviders(catalog);
     element('credential-fields').disabled = element('credential-storage-type').value !== 'manual' || !workspace.ready('credentials');
-    if (!catalog) return;
+    if (!catalog) { inventory.render(null); return; }
     const entries = [], diagnostic = operatorDiagnosticResources(catalog);
     for (const credential of catalog.credentials) {
       const google = credential.auth_type === 'google_oauth';
@@ -434,7 +435,7 @@ function createCredentialsView(workspace, actions = {}) {
           const missing = [...new Set((preset?.operations || []).map(item => item.origin))].filter(origin => !catalog.allowed_upstreams.includes(origin));
           if (missing.length) {
             const notice = textNode('p', 'Destination approval required: ' + missing.join(', ') + '. ', 'notice');
-            const link = textNode('a', 'Review Proxy destinations'); link.href = '#proxy'; notice.append(link); card.append(notice);
+            const link = textNode('a', 'Review Proxy destinations'); link.href = '#proxy-upstreams'; notice.append(link); card.append(notice);
           }
         }
         if (xAccount) card.append(textNode('p', credential.provider_account + ' · Connected X account. ' +
@@ -533,14 +534,17 @@ function createCredentialsView(workspace, actions = {}) {
         }); card.append(button);
         if (credential.active_rule_count > 0) card.append(textNode('p', 'Revoke the referencing access rules first. Shared application identities are retained.', 'small muted'));
       }
-      entries.push({card, group: credential.status === 'revoked' ? 'revoked' : diagnostic.credentials.has(credential.id) ? 'diagnostic' :
+      entries.push({card, keywords: [credential.auth_type, credential.app_preset || '',
+        ...catalog.access_rules.filter(rule => rule.credential_id === credential.id).flatMap(rule => [rule.id, rule.application_id])],
+        group: credential.status === 'revoked' ? 'revoked' : diagnostic.credentials.has(credential.id) ? 'diagnostic' :
         operatorCredentialHasExpiredAppAccess(credential, catalog) ? 'expired' : 'current'});
     }
-    renderResourceGroups('credentials-list', entries, 'No current credentials in the main list. Add a provider account or key above, or expand a retained group below to manage existing records.');
+    inventory.render(entries, 'No current credentials in the main list. Add a provider account or key above, or expand a retained group below to manage existing records.');
   }
   workspace.subscribe(render); return {render};
 }
 function createAccessRulesView(workspace, actions = {}) {
+  const inventory = createResourceInventory('access-rules-list', 'permissions');
   const form = element('access-rule-form');
   function manualResources(catalog) {
     const diagnostics = operatorDiagnosticResources(catalog);
@@ -674,7 +678,7 @@ function createAccessRulesView(workspace, actions = {}) {
     const credentialInputModes = availableCredentialInputModes(catalog);
     element('access-rule-fields').disabled = !workspace.ready('access_rules') || !choices.credentials.length ||
       !choices.applications.length || !choices.origins.length || !responseModes.length || !credentialInputModes.length;
-    if (!catalog) { renderResponseMode(); renderCredentialInput(); renderRequestBody(); renderSummary(); return; }
+    if (!catalog) { inventory.render(null); renderResponseMode(); renderCredentialInput(); renderRequestBody(); renderSummary(); return; }
     chooseModeOptions('rule-response-mode', responseFormChoices(catalog, element('rule-response-mode').value), 'No supported response mode available');
     renderResponseMode();
     chooseOptions('rule-application-id', [{id: '', name: choices.applications.length ? 'Choose a client' : 'Create a client first'},
@@ -687,14 +691,24 @@ function createAccessRulesView(workspace, actions = {}) {
     chooseOptions('rule-upstream-origin', [{id: '', name: 'Choose an approved destination'}, ...choices.origins.map(origin => ({id: origin, name: origin}))], 'No approved destination configured');
     renderSummary();
     const diagnostic = operatorDiagnosticResources(catalog);
-    renderResourceGroups('access-rules-list', catalog.access_rules.map(rule => {
+    inventory.render(catalog.access_rules.map(rule => {
       const application = catalog.applications.find(item => item.id === rule.application_id);
       const credential = catalog.credentials.find(item => item.id === rule.credential_id);
       const enforced = workspace.loaded() && rule.enforcement === (rule.status === 'revoked' ? 'revoked' : 'active');
-      const badge = rule.status === 'revoked' ? enforced ? 'Revoked · enforced' : 'Revoked · enforcement pending' : enforced ? 'Active' : 'Saved · activation pending';
-      const card = resourceCard(rule, badge, [['Application', application?.name || rule.application_id], ['Credential', credential?.name || rule.credential_id],
+      const badge = rule.status === 'revoked' ? enforced ? 'Revoked · enforced' : 'Revoked · enforcement pending' : enforced ? 'Permission loaded' : 'Saved · activation pending';
+      const card = resourceCard(rule, badge, [['Client', application?.name || rule.application_id], ['Credential', credential?.name || rule.credential_id],
         ...operatorRuleCredentialRows(rule, credential), ...operatorRuleRestrictions(rule), ...operatorApprovalRows(rule), ['Rule ID', rule.id]]);
       if (rule.status === 'active') {
+        const expired = application?.status === 'active' &&
+          (application.token_status === 'expired' || Date.now() >= application.token_expires_at_epoch_ms);
+        const next = textNode('p', !enforced ? 'Wait for this exact saved permission to load before using it.' :
+          application?.status !== 'active' ? 'The linked client is unavailable. Review its saved status before use.' :
+          expired ? 'The permission is loaded, but this client’s proxy token has expired. Replace its token in Clients, then update the client configuration.' :
+          credential?.status !== 'active' ? 'The linked credential is unavailable. Review Credentials before use.' :
+          'Permission loaded. Open client setup for the connection instructions; provider access has not been tested by this status.', 'small muted');
+        next.dataset.ruleNextStep = '';
+        if (expired) { const link = textNode('a', ' Review clients'); link.href = '#applications'; next.append(link); }
+        card.querySelector('.metadata').before(next);
         const configure = textNode('button', 'Open client setup', 'secondary'); configure.dataset.action = 'configure-rule';
         configure.disabled = workspace.state.busy || workspace.state.uncertain || application?.status !== 'active' ||
           !operatorRuleSupported(rule, catalog) || typeof actions.configure !== 'function';
@@ -726,7 +740,8 @@ function createAccessRulesView(workspace, actions = {}) {
           workspace.mutate('access-rules/revoke', {id: rule.id}, 'rule-action-status');
         }); card.append(button);
       }
-      return {card, group: rule.status === 'revoked' ? 'revoked' : diagnostic.access_rules.has(rule.id) ? 'diagnostic' : 'current'};
+      return {card, keywords: [rule.application_id, rule.credential_id, credential?.app_preset || ''],
+        group: rule.status === 'revoked' ? 'revoked' : diagnostic.access_rules.has(rule.id) ? 'diagnostic' : 'current'};
     }), 'No current permissions in the main list. Saved credentials and clients alone grant no access. Expand retained groups below to review existing permissions.');
   }
   workspace.subscribe(render); return {render};

@@ -338,18 +338,18 @@ function chooseOptions(id, items, placeholder) {
 function resourceCard(item, badge, values) {
   const card = textNode('article', undefined, 'card'); card.dataset.resourceId = item.id;
   const heading = textNode('div', undefined, 'connection-head');
-  heading.append(textNode('h3', item.name), textNode('span', badge, 'badge' + (badge === 'Active' ? ' active' : '')));
+  heading.append(textNode('h3', item.name), textNode('span', badge, 'badge' + (['Active', 'Permission loaded'].includes(badge) ? ' active' : '')));
   const list = textNode('dl', undefined, 'metadata');
   for (const [label, value] of values) list.append(textNode('dt', label), textNode('dd', value || 'None'));
   card.append(heading, list); return card;
 }
 function renderCards(id, cards, empty) { element(id).replaceChildren(...(cards.length ? cards : [textNode('p', empty, 'muted')])); }
-function renderResourceGroups(containerId, entries, emptyText) {
+function renderResourceGroups(containerId, entries, emptyText, {expanded = false, groupState = null} = {}) {
   const container = element(containerId);
   const previous = new Map([...container.querySelectorAll('details')].map(node =>
     [node.dataset.resourceGroup || (Object.hasOwn(node.dataset, 'expiredAppAccess') ? 'expired' : ''), node.open]));
   const cards = entries.filter(entry => entry.group === 'current').map(entry => entry.card);
-  if (!cards.length) cards.push(textNode('p', emptyText, 'muted'));
+  if (!cards.length && (!expanded || !entries.length)) cards.push(textNode('p', emptyText, 'muted'));
   const groups = {
     expired: ['Connections with expired app access', 'Every linked application has an expired token or is revoked. These saved records remain intact; grouping does not validate or revoke provider keys. Review application access and permissions before using them.'],
     diagnostic: ['Connection-check resources', 'These records target only the local fixture at https://demo-upstream:8443/echo. They are retained for troubleshooting. Collapsing this section does not disable active permissions. Expand to inspect or manage them.'],
@@ -358,7 +358,8 @@ function renderResourceGroups(containerId, entries, emptyText) {
   for (const [group, [label, explanation]] of Object.entries(groups)) {
     const selected = entries.filter(entry => entry.group === group).map(entry => entry.card);
     if (!selected.length) continue;
-    const details = textNode('details', undefined, 'card'); details.dataset.resourceGroup = group; details.open = Boolean(previous.get(group));
+    const details = textNode('details', undefined, 'card'); details.dataset.resourceGroup = group;
+    details.open = expanded || Boolean((groupState || previous).get(group));
     details.append(textNode('summary', label + ' (' + selected.length + ')'), textNode('p', explanation, 'small muted'));
     if (group === 'expired') {
       details.dataset.expiredAppAccess = '';

@@ -262,12 +262,12 @@ test('terminal admits only exact public evidence and preserves no real-provider 
 });
 test('client revocation retains the full current renewal warning and exact confirmation', () => {
   const prompt = applicationRevocationDialog(runId + '-app', ids.application);
-  assert.equal(prompt, `Revoke application "${runId}-app" (${ids.application}) and its 0 active access rules? This also cancels workload renewal and previous-token overlap. Shared provider credentials and other applications remain. Enforcement begins after the proxy loads the new policy; already-dispatched requests cannot be recalled.`);
+  assert.equal(prompt, `Revoke client "${runId}-app" (${ids.application}) and its 0 active permissions? This also cancels workload renewal and previous-token overlap. Shared provider credentials and other clients remain. Enforcement begins after the proxy loads the new policy; already-dispatched requests cannot be recalled.`);
   // Read source as text only; do not import or evaluate the UI. A future product
   // confirmation change must update this exact joined-journey expectation.
   const source = require('node:fs').readFileSync(require('node:path').join(__dirname,
     '../catchplate/operator_demo_web/workspace_applications.js'), 'utf8');
-  const confirmations = [...source.matchAll(/window\.confirm\(`(Revoke application [^`]+)`\)/g)];
+  const confirmations = [...source.matchAll(/window\.confirm\(`(Revoke client [^`]+)`\)/g)];
   assert.equal(confirmations.length, 1);
   const rendered = confirmations[0][1].replaceAll('${application.name}', runId + '-app')
     .replaceAll('${application.id}', ids.application).replaceAll('${application.active_rule_count}', '0');

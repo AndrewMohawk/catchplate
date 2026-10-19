@@ -79,6 +79,9 @@ class OperatorCatalogAssets(unittest.TestCase):
             for consumer in ('workspace_resources.js', 'workspace_proxy_audit.js', 'workspace_connect.js', 'app.js'):
                 self.assertLess(reads.index(provider), reads.index(consumer))
         self.assertEqual(reads.count('workspace_notifications.js'), 1)
+        self.assertEqual(reads.count('workspace_inventory.js'), 1)
+        self.assertLess(reads.index('workspace_inventory.js'), reads.index('workspace_resources.js'))
+        self.assertLess(reads.index('workspace_inventory.js'), reads.index('workspace_applications.js'))
         self.assertEqual(reads.count('workspace_pending_actions.js'), 1)
         self.assertLess(reads.index('workspace_pending_actions.js'), reads.index('app.js'))
         self.assertEqual(reads.count('workspace_upstreams.js'), 1)

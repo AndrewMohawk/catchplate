@@ -4,20 +4,20 @@
 
 ## Use the current instance
 
-Open the [retained instance](https://serverware.example.com/) with the homelab login.
-Access was restored without reboot at the October 17, 07:46:36 UTC checkpoint:
-verified console TLS/Authelia redirect and main lab CA/policy health passed.
-The page still says Serverware. Catchplate source/build and isolated startup
-checks are complete, but main retained-state migration and hostname cutover
-have not started. They remain paused while the original app/gate drain audit
-delivery; historical dropped events are not erased by recovery. The latest
-user instruction forbids reboot. Follow the [rename status](catchplate-rename.md);
-do not change an existing deployment's paths or private configuration by hand.
-It is already running: opening it does not build the proxy, start a pilot or
-require a security-key ceremony. Follow [Getting started](wiki/Getting-started.md)
-to save a provider credential, create a client and grant a permission. Developers
-can use an administrator-provided [private client configuration](wiki/Clients-and-recipes.md)
-without installing the server or receiving provider keys.
+**Administrator:** open the [running console](https://serverware.example.com/)
+with the homelab login and follow [first-client setup](wiki/Getting-started.md).
+You can save a credential first, then give a client a scoped permission.
+Opening the console does not build the proxy, start a pilot or require a
+security-key ceremony.
+
+**Developer:** if you already have a private client JSON and its public CA,
+go straight to the [developer quickstart](developer-quickstart.md). You do not
+need to install Catchplate, sign in as an administrator or obtain the provider key.
+
+The main instance still uses the Serverware hostname and runtime identity while
+this repository is named Catchplate. Keep its downloads with the matching client
+release until the operator completes the [rename](catchplate-rename.md).
+Do not manually substitute hostnames, protocol markers or private configuration.
 
 The [current deployment record](project-completion.md#current-live-deployment)
 identifies this instance's exact source, proxy binary and retained Compose
@@ -26,15 +26,10 @@ Do not recreate its state, regenerate its keys or run a historical rollout scrip
 
 ## Install a new instance
 
-The [standalone installation guide](../docker/catchplate-standalone/README.md)
-provides the new host-trusted app/proxy/Nginx package and one JSON configuration.
-**Renamed isolated build/startup verified.** The Catchplate package passed a
-fresh fixture-enabled install and retained-state app/gate startup, separately
-from the older installation/lifecycle evidence. Those checks do not establish
-the main live cutover or real-provider use. Follow the [rename evidence](catchplate-rename.md#rename-evidence)
-and [installation verification record](standalone-installation-verification.md).
-It does not
-depend on the homelab login or retained deployment paths. You supply a Linux
+Use the [standalone installation guide](../docker/catchplate-standalone/README.md)
+only when you want to operate a **new, empty instance**. It packages the console,
+Rust proxy and Nginx edge with one JSON configuration; it does not depend on
+the homelab login or retained deployment paths. You supply a Linux
 Docker host, two HTTPS hostnames, a certificate covering both, and a dedicated
 empty state location. The console uses a separate administrator password.
 
@@ -43,6 +38,11 @@ and stop commands. Later starts reuse the same images and retained private state
 opening the app does not build anything. There are no seeded provider credentials,
 clients or permissions. Read the guide's current renewal/maintenance limitations
 before treating initial startup as a complete operational handoff.
+
+The deployment trusts its server administrator. Hardware verification is a
+separate assurance option, not a prerequisite for this installation model.
+For tested-version boundaries, see the [installation record](standalone-installation-verification.md)
+and [renamed build/startup evidence](catchplate-rename.md#rename-evidence).
 
 Do not use the root developer Compose stack or the old homelab operator Compose
 layers as a substitute installer. The latter's `.env.example` contains only

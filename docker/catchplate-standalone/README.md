@@ -6,15 +6,14 @@ Authelia, Traefik or the original homelab deployment. The console uses an
 administrator username/password; applications use their own Catchplate client
 tokens through the separate proxy hostname.
 
-**Pre-rename verification record.** The Serverware-named predecessor passed both
-build paths, fresh starts, browser checks, saved-state restart and TLS replacement.
-Those retained results do not establish that the renamed Catchplate artifact or
-an existing-instance migration has passed. No host ports or provider calls were
-used. See the [verification record](../../docs/standalone-installation-verification.md)
-for exact boundaries; this is not proof of your public deployment or provider access.
-These steps are not a migration recipe for the existing running instance. Host administrators
-remain trusted: control of the server can bypass its policies. No TEE or hardware
-approval guarantee is claimed.
+**Already have a running instance?** Use its console and
+[first-client guide](../../docs/wiki/Getting-started.md), or the
+[developer quickstart](../../docs/developer-quickstart.md) if you have a private
+client configuration. Do not initialize or rebuild a server just to use it.
+
+These steps are for a new installation, not migration of existing state.
+Host administrators remain trusted: control of the server can bypass its
+policies. See [verification scope](#verification-scope) for tested-version details.
 
 ## What you need
 
@@ -243,6 +242,21 @@ workflow **while the console is still running**, before stopping the instance.
 If it is already stopped with a pending change, retain its state and seek an
 explicit deployment recovery; do not edit the manifest to bypass this boundary.
 X application configuration is saved immediately, with account consent separate.
+
+## Verification scope
+
+The Serverware-named predecessor passed both build paths, fresh starts, browser
+checks, saved-state restart and TLS replacement in isolated installations. Those
+immutable receipts are retained in the
+[installation verification record](../../docs/standalone-installation-verification.md).
+Later renamed build and isolated startup results are recorded separately in the
+[Catchplate rename evidence](../../docs/catchplate-rename.md#rename-evidence);
+they do not repeat the whole earlier lifecycle matrix.
+
+Neither record proves your public deployment, provider access or the main
+instance's completed migration. No new build or installation is required merely
+to read these records. Hardware/TEE assurance remains separate from the accepted
+host-trusted installation model.
 
 No automatic image upgrade, migration, backup scheduling, DNS management, TLS
 automation or hosted provider acceptance is implied by these commands.

@@ -113,6 +113,14 @@ function createConnectView(workspace, applications, proxy) {
   const publishGrantAvailable = () => npmPublishNewRuleAvailable(catalog(), selectedApplication) &&
     !catalog()?.access_rules.some(item => item.status === 'active' && item.application_id === selectedApplication && isNpmInstallRule(item));
   const message = text => { element('connect-status').textContent = text; };
+  function savedCredentialProblem() {
+    const id = element('connect-credential-choice').value;
+    if (!id) return 'Choose a saved credential to continue.';
+    const item = catalog()?.credentials.find(item => item.id === id);
+    if (item?.status !== 'active') return 'This credential is no longer available. Review it in Credentials or choose another saved credential. No access has been granted.';
+    if (!operatorCredentialCanSetUpAccess(item, catalog())) return 'This credential is saved, but provider access is unavailable. The deployment must advertise a supported operation and approve its destination before you can set up client access. Review administrator settings or choose another credential. You do not need to enter this key again; no access has been granted.';
+    return '';
+  }
   renderOperatorCompatibility('connect-compatibility-content');
   const accountSummary = textNode('div'); accountSummary.id = 'connect-google-account-summary';
   accountSummary.hidden = true; element('connect-progress').after(accountSummary);
@@ -548,8 +556,16 @@ function createConnectView(workspace, applications, proxy) {
       (gmailAge?.mode === 'unrestricted' ? 'No age restriction or optional content filtering.' : gmailAgePolicySummary(gmailAge)) +
       ' No sending, changes, attachments, history or Calendar. GET only, no request body; bounded JSON responses only.';
     element('connect-credential-next').textContent = newGithubApp() ? 'Save and verify GitHub App' : newCredential ? saveOnly ? 'Save credential' : 'Save credential & continue' : 'Use saved credential';
+    const savedProblem = connectionMethod === 'saved' ? savedCredentialProblem() : '';
+    const unavailableSaved = Boolean(savedProblem && element('connect-credential-choice').value);
+    element('connect-saved-availability').hidden = !unavailableSaved;
+    element('connect-saved-availability-message').textContent = unavailableSaved ? savedProblem : '';
+    const savedActive = catalog()?.credentials.some(item => item.id === element('connect-credential-choice').value && item.status === 'active');
+    element('connect-saved-availability-link').href = savedActive ? '#proxy-operator-settings' : '#credentials';
+    element('connect-saved-availability-link').textContent = savedActive ? 'Review administrator settings' : 'Review credentials';
     element('connect-credential-next').disabled = connectionMethod === 'common' && !commonPreset() || connectionMethod === 'github' && !githubCreationAvailable() ||
-      !newCredential && !catalog()?.credentials.some(item => item.id === element('connect-credential-choice').value && item.status === 'active');
+      connectionMethod === 'saved' && Boolean(savedProblem) ||
+      !newCredential && !savedActive;
     element('connect-application-next').textContent = newApp ? 'Create client & continue' : 'Use this client';
     element('connect-application-proxy-default').textContent = newApplicationProxyAuthentication(catalog()).proxy_authentication ?
       'Proxy login: public application ID as username, this app’s token as password. Bearer also remains supported. Never use the provider key.' :
@@ -778,7 +794,9 @@ function createConnectView(workspace, applications, proxy) {
     if (step !== 0 || !['key', 'github', 'npm', 'common', 'saved'].includes(connectionMethod) || !writable() || checkpoint || !event.currentTarget.reportValidity()) return;
     const choice = element('connect-credential-choice').value;
     if (connectionMethod === 'saved') {
-      if (saveOnly || !catalog().credentials.some(item => item.id === choice && operatorCredentialCanSetUpAccess(item, catalog()))) return;
+      if (saveOnly) return;
+      const problem = savedCredentialProblem();
+      if (problem) { message(problem); renderForms(); return; }
       savedChoice = choice; selectedCredential = choice; selectedApplication = ''; selectedRule = ''; review = null; goto(1); return;
     }
     if (!workspace.ready('credentials') || connectionMethod === 'github' && !githubCreationAvailable() || connectionMethod === 'npm' && !catalog().capabilities.npm) return;

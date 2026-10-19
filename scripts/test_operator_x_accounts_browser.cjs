@@ -389,6 +389,7 @@ const tests = [
     await review(page); assert.match(await page.locator('#connect-review-details').innerText(), /No daily posting-attempt limit is set/);
     await responsive(page); await grant(page); assert.equal(seen.grants.length, 1);
     assert.deepEqual(state.rules[0], postRule());
+    await page.locator('#client-advanced-template > summary').click();
     const recipe = await page.locator('#client-command').innerText(); assert(recipe.includes('CATCHPLATE_X_POST_CONFIRM=post-once'));
     assert(!recipe.includes(SECRET)); assert(!recipe.includes('fixture_user')); await privacy(page);
   })],
@@ -427,6 +428,7 @@ const tests = [
       await grant(page); assert.equal(seen.grants.length, 1);
       assert.equal(seen.grants[0].daily_post_attempt_limit, 42);
       assert.equal(state.rules[0].daily_post_attempt_limit, 42);
+      await page.locator('#client-advanced-template > summary').click();
       assert.match(await page.locator('#client-guidance').innerText(), /42 posting attempts per UTC day/);
       await refresh(page); assert.equal(seen.grants.length, 1); await privacy(page);
     })],
@@ -463,9 +465,19 @@ const tests = [
       assert.equal(seen.grants.length, 0); assert.equal(state.rules.length, 0); await privacy(page);
     })],
   ['unavailable gate blocks new posting without generic fallback', browser => fixture(browser, {gateReady: false}, async (page, state, seen) => {
-    await pair(page); assert.equal(await page.locator('#connect-operation option:not([disabled])').count(), 0);
-    assert.match(await page.locator('#connect-x-post-summary').innerText(), /Posting is unavailable/);
-    assert(await page.locator('#connect-review').isDisabled()); assert.equal(seen.grants.length, 0); await privacy(page);
+    await ready(page); await view(page, 'connect'); await page.locator('#connect-use-saved').click();
+    await page.locator('#connect-credential-choice').selectOption(IDS.credential);
+    assert(await page.locator('#connect-credential-next').isDisabled());
+    assert(await page.locator('#connect-saved-availability').isVisible());
+    assert.match(await page.locator('#connect-saved-availability').innerText(), /credential is saved, but provider access is unavailable/);
+    assert.equal(await page.locator('#connect-saved-availability-link').getAttribute('href'), '#proxy-operator-settings');
+    await page.locator('#connect-credential-form').evaluate(form => form.requestSubmit());
+    assert.match(await page.locator('#connect-status').innerText(), /provider access is unavailable/);
+    assert(await page.locator('#connect-application-step').isHidden());
+    assert.equal(await page.locator('#connect-credential-choice').inputValue(), IDS.credential);
+    await responsive(page);
+    assert.equal(seen.grants.length, 0); assert.equal(seen.starts.length, 0); assert.equal(seen.disconnects.length, 0);
+    await privacy(page);
   })],
   ['gate-unavailable disconnect reviews exact scope and remains usable on mobile', browser => fixture(browser, {gateReady: false, rules: [postRule()]}, async (page, state, seen) => {
     await view(page, 'credentials'); assert(await page.locator('#x-account-start').isDisabled());
@@ -500,7 +512,7 @@ async function hashes() {
     ...(await readdir(join(ROOT, 'catchplate/operator_demo_web'))).filter(name => /\.(html|js|css)$/.test(name)).sort().map(name => 'catchplate/operator_demo_web/' + name)];
   return Object.fromEntries(await Promise.all(names.map(async name => [name, createHash('sha256').update(await readFile(join(ROOT, name))).digest('hex')])));
 }
-async function runSuite(browser, configurationOnly = false, recoveryOnly = false) {
+async function runSuite(browser, configurationOnly = false, recoveryOnly = false, fromGroup = 1) {
   const before = await hashes(); const contexts = new Set(); let timer; let finished = false; let passed = 0;
   const artifacts = {directory: await mkdtemp('/tmp/catchplate-x-accounts-browser-'), paths: [], cases: []};
   console.log(JSON.stringify({phase: 'source-before', hashes: before, artifactDirectory: artifacts.directory}));
@@ -508,7 +520,9 @@ async function runSuite(browser, configurationOnly = false, recoveryOnly = false
     if (finished) { await context.close(); throw new Error('suite finished'); }
     contexts.add(context); context.on('close', () => contexts.delete(context)); return context; }};
   try {
-    const selected = recoveryOnly ? [configurationTests[2]] : configurationOnly ? configurationTests : tests;
+    const available = recoveryOnly ? [configurationTests[2]] : configurationOnly ? configurationTests : tests;
+    assert(Number.isSafeInteger(fromGroup) && fromGroup >= 1 && fromGroup <= available.length);
+    const selected = available.slice(fromGroup - 1);
     await Promise.race([(async () => { for (const [name, test] of selected) {
       let caseTimer;
       try {
@@ -519,7 +533,8 @@ async function runSuite(browser, configurationOnly = false, recoveryOnly = false
       passed++; console.log('PASS ' + name);
     } })(),
       new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('X accounts browser deadline')), configurationOnly ? 60000 : 120000); })]);
-    return {ok: true, groups: passed, backendAcceptance: false, providerRequests: 0, proxyRequests: 0,
+    return {ok: true, groups: passed, firstGroup: fromGroup, totalGroups: available.length,
+      backendAcceptance: false, providerRequests: 0, proxyRequests: 0,
       screenshots: artifacts.paths.length, screenshotPaths: artifacts.paths, artifactDirectory: artifacts.directory,
       configurationCases: artifacts.cases,
       recipeExecuted: false, sameSource: true, sourceHashes: before};
@@ -528,10 +543,13 @@ async function runSuite(browser, configurationOnly = false, recoveryOnly = false
 }
 async function run(page) { return runSuite(page.context().browser()); }
 async function main() {
-  assert.equal(process.argv.length, 2, 'No live-target arguments accepted');
+  const args = process.argv.slice(2);
+  const from = args.length === 0 ? 1 : args.length === 2 && args[0] === '--from-group' ? Number(args[1]) : NaN;
+  assert(Number.isSafeInteger(from) && from >= 1 && from <= tests.length,
+    'usage: test_operator_x_accounts_browser.cjs [--from-group N]; no live-target arguments accepted');
   const {chromium} = require('/home/catchplate/.nvm/versions/node/v25.5.0/lib/node_modules/playwright');
   const browser = await chromium.launch({headless: true, args: ['--no-sandbox', '--disable-background-networking']});
-  try { console.log(JSON.stringify(await runSuite(browser))); } finally { await browser.close(); }
+  try { console.log(JSON.stringify(await runSuite(browser, false, false, from))); } finally { await browser.close(); }
 }
 module.exports = {run, runSuite, runConfigurationSuite: browser => runSuite(browser, true),
   runConfigurationRecoverySuite: browser => runSuite(browser, true, true)};

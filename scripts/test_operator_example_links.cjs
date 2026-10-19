@@ -363,7 +363,12 @@ const tests = [
     assert.equal(node('client-example-note').textContent, '');
     render(null); assert.equal(node('client-examples').hidden, true);
     assert.equal(node('client-example-links').children.length, 0); assert.equal(node('client-example-note').textContent, '');
-    assert.match(PROXY, /function render\(\) \{\s*command = '';[^\n]*\n\s*handoffCommand = '';[^\n]*\n\s*renderOperatorExampleProjects\(null, null\)/);
+    const start = PROXY.indexOf('function render() {');
+    const catalogRead = PROXY.indexOf('const catalog = workspace.state.catalog;', start);
+    assert(start >= 0 && catalogRead > start);
+    const beforeCatalog = PROXY.slice(start, catalogRead);
+    assert.match(beforeCatalog, /command = '';[^\n]*\n\s*handoffCommand = '';[^\n]*\n\s*renderOperatorExampleProjects\(null, null\)/);
+    assert(!/\breturn\b/.test(beforeCatalog), 'public examples and commands clear before catalog-dependent early returns');
     assert.equal(networkCalls, 0);
   }],
   ['all advertised project directories contain a README in the source snapshot', () => {

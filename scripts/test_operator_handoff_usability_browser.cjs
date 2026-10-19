@@ -29,6 +29,38 @@ async function run(browser) {
     const path = join(directory, name + '.png');
     await page.screenshot({path, fullPage: false}); return path;
   }
+  await github.fixture(browser, {}, async (page, state, observed) => {
+    await ready(page); await view(page, 'connect'); await page.locator('#connect-use-saved').click();
+    await page.locator('#connect-credential-choice').selectOption(IDS.credential);
+    assert(!(await page.locator('#connect-credential-next').isDisabled()));
+    assert(await page.locator('#connect-saved-availability').isHidden());
+    async function refreshSetup(disabled) {
+      const received = page.waitForResponse(response => new URL(response.url()).pathname === '/api/operator-demo/catalog');
+      await page.locator('#connect-status-refresh').click();
+      await (await received).finished(); await ready(page);
+      await page.waitForFunction(expected => document.querySelector('#connect-credential-next').disabled === expected, disabled);
+    }
+    state.allowedUpstreams = []; await refreshSetup(true);
+    assert(await page.locator('#connect-credential-next').isDisabled());
+    assert.match(await page.locator('#connect-saved-availability').innerText(), /provider access is unavailable/);
+    assert.equal(await page.locator('#connect-credential-choice').inputValue(), IDS.credential);
+    assert.equal(await page.locator('#connect-saved-availability-link').getAttribute('href'), '#proxy-operator-settings');
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({width, height: 960});
+      await page.locator('#connect-saved-choice').scrollIntoViewIfNeeded();
+      results.push({case: 'saved-provider-unavailable', width, screenshot: await screenshot(page, 'saved-unavailable-' + width)});
+    }
+    state.allowedUpstreams = ['https://api.github.com']; await refreshSetup(false);
+    assert(!(await page.locator('#connect-credential-next').isDisabled()));
+    assert(await page.locator('#connect-saved-availability').isHidden());
+    state.credentials[0].status = 'revoked'; await refreshSetup(true);
+    assert(await page.locator('#connect-credential-next').isDisabled());
+    assert.match(await page.locator('#connect-saved-availability').innerText(), /no longer available/);
+    assert.equal(await page.locator('#connect-saved-availability-link').getAttribute('href'), '#credentials');
+    assert.equal(await page.locator('#connect-credential-choice').inputValue(), IDS.credential);
+    assert.equal(observed.creates.length + observed.grants.length, 0); assert.deepEqual(state.posts, []);
+    results.push({case: 'saved-provider-withdrawal-recovery-and-revocation', passed: true});
+  });
   await fixture(browser, {credentials: [], applications: [], rules: []}, async (page, state) => {
     await ready(page); await view(page, 'proxy');
     assert.equal(await page.locator('#proxy-rule option:checked').innerText(), 'Choose a client first');

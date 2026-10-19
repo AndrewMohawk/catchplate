@@ -12,9 +12,10 @@ A GitHub App ID is **not** `CATCHPLATE_APP_ID`. The latter is the Catchplate cli
 
 **Already have access?** Start with the [handoff checklist](../developer-quickstart.md#before-you-start),
 then choose a job below. You can skip **Set up one client** and environment-variable
-setup when using the complete private download. During the
-[rename](../catchplate-rename.md), use a release matching your actual instance;
-the main retained Serverware deployment is not changed by checking out Catchplate.
+setup when using the complete private download. Use the client release matching
+your actual instance. The running Catchplate instance requires a fresh private
+configuration and its new CA after the [rename](../catchplate-rename.md);
+checking out new code does not update an old download or its trust settings.
 
 ## Choose the job before the library
 

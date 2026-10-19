@@ -74,7 +74,7 @@ wiki_git() {
 }
 wiki_git -C "$wiki_source" fetch origin main
 test "$wiki_source_commit" = "$(git -C "$wiki_source" rev-parse origin/main)"
-wiki_publish_dir=$(mktemp -d /srv/catchplate-fast/tmp/serverware-wiki-publish.XXXXXXXX)
+wiki_publish_dir=$(mktemp -d /srv/catchplate-fast/tmp/catchplate-wiki-publish.XXXXXXXX)
 wiki_checkout="$wiki_publish_dir/wiki"
 wiki_git clone https://github.com/AndrewMohawk/catchplate.wiki.git "$wiki_checkout"
 wiki_branch=$(git -C "$wiki_checkout" branch --show-current)

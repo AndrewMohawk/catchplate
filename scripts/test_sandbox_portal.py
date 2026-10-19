@@ -104,6 +104,16 @@ class SandboxPortalTests(unittest.TestCase):
         self.assertIn("Streaming request transformations are unsupported and refused.", document)
         self.assertIn("not the forward proxy", document)
 
+    def test_client_preferences_do_not_import_an_old_installations_ca_path(self):
+        script = (ASSETS / "app.js").read_text(encoding="utf-8")
+        document = sandbox_portal.render()
+        self.assertNotIn("serverware", script.lower())
+        self.assertEqual(script.count("localStorage.getItem("), 1)
+        self.assertIn("localStorage.getItem('catchplate.sandbox.client.v1')", script)
+        elements = Elements(document).elements
+        ca_path = next(attrs for _, attrs in elements if attrs.get("id") == "ca-path")
+        self.assertEqual(ca_path["value"], "./catchplate-ca.pem")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

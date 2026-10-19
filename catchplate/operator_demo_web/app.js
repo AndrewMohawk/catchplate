@@ -61,8 +61,8 @@ else {
   const workspace = createOperatorWorkspace(browserStateMigration);
   element('browser-recovery-status').hidden = !browserStateMigration.blocked && !browserStateMigration.migrated;
   element('browser-recovery-status').textContent = browserStateMigration.blocked ?
-    'An earlier Serverware recovery marker could not be transferred safely. Changes are blocked; keep this tab and review the recovery guidance below.' :
-    'This tab’s earlier Serverware operation references were retained for Catchplate. Unresolved operations still need review; no request was retried.';
+    'A recovery marker from the previous installation could not be transferred safely. Changes are blocked; keep this tab and review the recovery guidance below.' :
+    'This tab’s operation references from the previous installation were retained for Catchplate. Unresolved operations still need review; no request was retried.';
   if (browserStateMigration.blocked) element('browser-recovery-guide').open = true;
   if (!browserStateMigration.blocked && !browserStateMigration.migrated)
     document.querySelector('footer').prepend(element('browser-recovery-guide'));

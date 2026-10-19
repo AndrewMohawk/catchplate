@@ -315,17 +315,8 @@
   }
 
   try {
-    // Only non-secret preferences can follow the rename on this same origin.
-    // Preserve the selected CA path; renaming the UI does not rename its file.
-    const key = 'catchplate.sandbox.client.v1', legacyKey = 'serverware.sandbox.client.v1';
-    if (localStorage.getItem(key) === null) {
-      const raw = localStorage.getItem(legacyKey), old = JSON.parse(raw || 'null');
-      if (old && Object.keys(old).length === 2 && ['curl', 'python'].includes(old.client) &&
-          typeof old.ca === 'string' && old.ca.length <= 512 && !/[\x00-\x1f\x7f]/.test(old.ca)) {
-        localStorage.setItem(key, raw);
-        if (localStorage.getItem(key) === raw) localStorage.removeItem(legacyKey);
-      }
-    }
+    // Load only preferences saved for this Catchplate origin. Never import a
+    // previous installation's CA path: its certificate may no longer be valid.
     const saved = JSON.parse(localStorage.getItem('catchplate.sandbox.client.v1') || 'null');
     if (saved && ['curl', 'python'].includes(saved.client) && typeof saved.ca === 'string' && saved.ca.length <= 512) {
       $('client-type').value = saved.client; $('ca-path').value = saved.ca;

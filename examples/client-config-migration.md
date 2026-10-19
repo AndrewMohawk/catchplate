@@ -1,3 +1,5 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # Existing private client configurations
 
 The project is now **Catchplate**. Current examples use `CATCHPLATE_*` environment
@@ -5,8 +7,16 @@ variables, Catchplate public authentication placeholders, and the
 `mcpServers.catchplate` launch entry. Renaming the project does not renew a client
 token or grant a new permission.
 
+**Using `catchplate.example.com`?** Its cutover issued a new CA. Obtain a
+fresh private configuration, verified Catchplate CA and the
+[matching client release](../docs/developer-quickstart.md#before-you-start).
+The converter below deliberately retains original CA paths; it is not the
+handoff procedure for this instance and does not make its old CA or hostname
+usable again. Never keep an old CA as a fallback or disable TLS verification.
+
 For a new client, use the current console's private configuration download and
-public CA. For an existing ordinary download, the local converter below retains
+public CA. For another deployment whose operator confirms unchanged CA trust,
+the local converter below retains
 the client token, IDs, expiry, scopes, query and request body. It changes only the
 known public markers and supported recipe identifiers. It never contacts the
 proxy/provider, reads a provider credential, executes the recipe or rotates a

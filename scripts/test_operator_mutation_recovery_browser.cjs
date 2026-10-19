@@ -13,6 +13,8 @@ const {MUTATION_REVIEW_KEY: KEY, MUTATION_REVIEW_VALUE: VALUE, acknowledgeMutati
   withoutMutationReview} = require('./operator_mutation_recovery_test_helpers.cjs');
 const CORE = readFileSync(resolve(__dirname, '../catchplate/operator_demo_web/workspace_core.js'), 'utf8');
 const APPLICATIONS = readFileSync(resolve(__dirname, '../catchplate/operator_demo_web/workspace_applications.js'), 'utf8');
+const HTML = readFileSync(resolve(__dirname, '../catchplate/operator_demo_web/index.html'), 'utf8');
+const APP = readFileSync(resolve(__dirname, '../catchplate/operator_demo_web/app.js'), 'utf8');
 const ORIGIN = 'https://operator-catalog.example.test';
 const CATALOG = '/api/operator-demo/catalog', CREATE = '/api/operator-demo/credentials';
 const SECRET = 'synthetic-recovery-secret-NEVER-PERSIST';
@@ -48,6 +50,15 @@ function inert({storage = new Map(), fault = null, realCatalog = false, migrate 
 }
 const pure = [];
 function test(name, run) { pure.push([name, run]); }
+test('current recovery copy uses Catchplate and requires a fresh handoff without weakening legacy guards', () => {
+  assert.doesNotMatch(HTML, /serverware/i);
+  assert.doesNotMatch(APP, /serverware/i);
+  assert(HTML.includes('Returning from a previous installation?'));
+  assert(HTML.includes('fresh private client configuration and verify the current Catchplate CA'));
+  assert(HTML.includes('Do not reuse an old CA as a fallback or disable TLS verification.'));
+  assert(APP.includes('A recovery marker from the previous installation could not be transferred safely. Changes are blocked;'));
+  assert(APP.includes('Unresolved operations still need review; no request was retried.'));
+});
 test('rename transfers only the twelve recognized public recovery marker types, without requests', () => {
   const id = IDS.application, ref = JSON.stringify({operation_id: id, kind: 'prepare'});
   const entries = [['operator.mutation.review.v1', VALUE], ['operator.upstreams.operation.v1', ref],

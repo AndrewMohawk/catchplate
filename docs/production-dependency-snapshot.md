@@ -166,7 +166,7 @@ docker pull --platform linux/amd64 \
 docker pull --platform linux/amd64 \
   rust:1.88-slim-bookworm@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89
 
-snapshot_workdir="$(mktemp -d /srv/catchplate-fast/tmp/serverware-dependency-candidate.XXXXXX)"
+snapshot_workdir="$(mktemp -d /srv/catchplate-fast/tmp/catchplate-dependency-candidate.XXXXXX)"
 python3 -B production-dependencies/prepare_snapshot.py \
   --expected-commit '<full-frozen-commit-id>' \
   --existing-cache /home/catchplate/codex-offload/catchplate/current/production-dependencies/cache \

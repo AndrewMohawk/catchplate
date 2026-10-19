@@ -49,12 +49,14 @@ of server activation, network reachability or a valid provider key. It is not a
 universal checker for GitHub, Gmail, npm, ECR or managed-client configs. MCP has
 its own local `--check`; use the [MCP guide](../../examples/mcp/README.md).
 
-If you have an older Serverware download, keep it with the matching client
-release until the operator confirms that instance's Catchplate cutover. The
-renamed repository does not update the retained main deployment. The
-[local migration guide](../../examples/client-config-migration.md) describes
-supported conversions; never rewrite signed state, policy hashes, tokens or
-provider selectors by search-and-replace.
+If you have a download from before the Catchplate cutover, obtain a fresh
+private configuration, the new verified Catchplate CA and the
+[matching client release](../developer-quickstart.md#before-you-start).
+The old hostname and CA are no longer supported by this instance. The
+[local converter](../../examples/client-config-migration.md) preserves old CA
+paths and is not a substitute for this fresh handoff. Never rewrite signed
+state, policy hashes, tokens or provider selectors by search-and-replace, and
+never disable TLS verification to work around a trust error.
 
 ## A save returned no clear result
 

@@ -1,5 +1,18 @@
 // Repository links contain public source paths only. Never personalize them
 // with an application ID, provider URL, credential, or private configuration.
+// Public build metadata. A retained protocol deployment pins the matching
+// client revision when projecting these assets; no runtime setting chooses it.
+const operatorClientSource = Object.freeze({repository: 'https://github.com/AndrewMohawk/catchplate/', revision: 'main'});
+function operatorClientSourceUrl(path, kind = 'blob') {
+  return operatorClientSource.repository + kind + '/' + operatorClientSource.revision + '/' + path;
+}
+function renderOperatorClientSourceLinks() {
+  element('client-mcp-guide').href = operatorClientSourceUrl('examples/mcp/README.md');
+  element('workload-client-guide').href = operatorClientSourceUrl('examples/managed-client', 'tree');
+  element('client-source-revision').hidden = operatorClientSource.revision === 'main';
+  element('client-source-revision-link').href = operatorClientSourceUrl('examples', 'tree');
+  element('client-source-revision-link').textContent = operatorClientSource.revision.slice(0, 8);
+}
 function operatorGmailSdkCompatible(rule, catalog) {
   const application = catalog?.applications.find(item => item.id === rule?.application_id && item.status === 'active');
   return Boolean(isGmailRule(rule) && rule.query_mode === 'orderedFormV1' &&
@@ -9,8 +22,8 @@ function operatorGmailSdkCompatible(rule, catalog) {
 }
 function operatorExampleProjects(rule, catalog) {
   if (!rule || rule.status !== 'active' || !operatorRuleSupported(rule, catalog)) return [];
-  const source = 'https://github.com/AndrewMohawk/catchplate/';
-  const branch = 'main/';
+  const source = operatorClientSource.repository;
+  const branch = operatorClientSource.revision + '/';
   const project = (label, directory) => ({label, kind: 'project', href: source + 'tree/' + branch + 'examples/' + directory});
   const guide = (label, filename) => ({label, kind: 'guide', href: source + 'blob/' + branch + 'docs/' + filename});
   if (isCommonAppRule(rule)) return [project('Python HTTP, service and AI SDK examples', 'common-apps'), guide('App scopes and compatibility', 'common-apps.md')];
@@ -57,6 +70,8 @@ function renderOperatorExampleProjects(rule, catalog) {
     'Public source only, separate from your private client config. Pinned Node.js, Python and Go examples passed isolated SDK-through-proxy checks. This page has not tested your X credentials or provider entitlement. The GitHub Actions recipe is inactive and has not been run.' : projects[0].kind === 'project' ?
     'Public source only, separate from your private client config. Check each README for setup and verification status; opening an example does not run it or verify access.' :
     'This saved permission links to its setup and verification guide only. The Go SDK project requires ordered Gmail queries, the exact public dummy and this app’s standard username/password proxy login. Saved permissions and login modes are never changed here.';
+  if (projects.length && operatorClientSource.revision !== 'main')
+    element('client-example-note').textContent += ' These links select client revision ' + operatorClientSource.revision.slice(0, 8) + '; use that version with this instance, not code from main.';
   for (const project of projects) {
     const link = textNode('a', project.label, 'button secondary');
     link.href = project.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.referrerPolicy = 'no-referrer';
@@ -111,6 +126,7 @@ function operatorFileHandoff(rule, runtime) {
     commands: profile.command, note: 'Run from ' + profile.directory + ' after the one-time preparation. Keep the JSON and verified CA together; replace the config path if stored elsewhere. ' + profile.note} : null;
 }
 function createProxyView(workspace, applications, actions = {}) {
+  renderOperatorClientSourceLinks();
   const home = element('proxy'); const content = element('proxy-setup-content');
   let command = '';
   let handoffCommand = '';

@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 // Inert public-code discovery checks only. No browser, HTTP, application,
-// generated recipe, package installation, provider or Git command is run.
+// generated recipe, package installation or provider request is run. The
+// retained-client check reads selected local Git objects, without checkout.
 const assert = require('node:assert/strict');
 const {readFileSync, statSync} = require('node:fs');
 const {resolve} = require('node:path');
 const vm = require('node:vm');
+const {execFileSync} = require('node:child_process');
 const {context, rawCatalog, npmRule, clone, IDS} = require('./test_operator_npm_ui.cjs');
 const {capability: publishCapability, publishRule} = require('./test_operator_npm_publish_ui.cjs');
 const {credential, application, rule} = require('./test_operator_catalog_browser.cjs');
@@ -90,6 +92,54 @@ function alchemy(chain = 'eth-mainnet') {
   return value;
 }
 const tests = [
+  ['retained protocol links select one immutable client revision without changing scope', () => {
+    const pin = JSON.parse(readFileSync(resolve(ROOT, 'docker/catchplate-operator-demo/client-source.json'), 'utf8'));
+    assert.deepEqual(Object.keys(pin).sort(), ['protocol', 'repository', 'revision']);
+    assert.equal(pin.protocol, 'serverware'); assert.equal(pin.repository, BASE);
+    assert.match(pin.revision, /^[a-f0-9]{40}$/);
+    const marker = "revision: 'main'"; assert.equal(PROXY.split(marker).length, 2);
+    const pinned = context();
+    vm.runInContext(PROXY.replace(marker, "revision: '" + pin.revision + "'"), pinned.value, {timeout: 1000});
+    for (const [current, revision] of [[f, 'main'], [pinned, pin.revision]]) {
+      current.run('renderOperatorClientSourceLinks()');
+      const get = id => current.dom.getElementById(id);
+      assert.equal(get('client-mcp-guide').href, BASE + 'blob/' + revision + '/examples/mcp/README.md');
+      assert.equal(get('workload-client-guide').href, BASE + 'tree/' + revision + '/examples/managed-client');
+      assert.equal(get('client-source-revision').hidden, revision === 'main');
+      assert.equal(get('client-source-revision-link').href, BASE + 'tree/' + revision + '/examples');
+      for (const input of [github(), gmail(), rawCatalog(), publishing(), x(), alchemy()]) {
+        const before = JSON.stringify(input);
+        const found = clone(current.run('operatorExampleProjects(input.access_rules[0], input)', input));
+        assert(found.length > 0);
+        assert(found.every(link => link.href.startsWith(BASE) && link.href.includes('/' + revision + '/')));
+        assert.equal(JSON.stringify(input), before, 'source navigation must not transform private config or permission');
+        if (revision !== 'main') for (const link of found) {
+          const target = link.href.split('/' + revision + '/')[1];
+          execFileSync('git', ['cat-file', '-e', revision + ':' + target], {cwd: ROOT, timeout: 5000, stdio: 'pipe'});
+        }
+      }
+    }
+    const source = file => execFileSync('git', ['show', pin.revision + ':' + file],
+      {cwd: ROOT, encoding: 'utf8', timeout: 5000, maxBuffer: 1024 * 1024});
+    for (const [base, python, marker] of [
+      ['github-issues', 'issues.py', 'github'], ['google-gmail', 'gmail.py', 'gmail'],
+      ['x-username', 'username.py', 'x'], ['x-post', 'post.py', 'x-post'],
+      ['alchemy-chain-status', 'chain_status.py', 'alchemy']]) {
+      for (const [language, filename] of [['node', base === 'alchemy-chain-status' ? 'request.mjs' : 'client.mjs'], ['python', python], ['go', 'main.go']]) {
+        const file = 'examples/' + base + '-' + language + '/' + filename;
+        const code = source(file);
+        assert(code.includes('serverware-' + marker + '-placeholder-v1'), file + ' must contain the retained public marker');
+        assert(!code.includes('catchplate-' + marker + '-placeholder-v1'), file + ' must not use renamed markers');
+        assert(source('examples/' + base + '-' + language + '/README.md').includes('--config'));
+      }
+    }
+    for (const file of ['examples/mcp/README.md', 'examples/managed-client/README.md']) assert(source(file).length > 0);
+    assert(source('examples/npm-registry/core.mjs').includes("PUBLIC_NPM_DUMMY = 'serverware-npm-placeholder-v1'"));
+    assert(source('examples/common-apps/request.py').includes('"serverware-" + config["app_preset"] + "-placeholder-v1"'));
+    assert(source('examples/mcp/legacy.py').includes('token serverware-github-placeholder-v1'));
+    assert(source('examples/managed-client/managed_client.py').includes('SETUP_SCHEMA = "serverware.managedClientSetup/v1"'));
+    assert.equal(networkCalls, 0);
+  }],
   ['private-config handoffs select one prepared runtime without compiling during execution', () => {
     for (const bundle of ['github_issues_read_v1', 'github_issues_write_v1', 'alchemy_chain_status_read_v1',
       'x_username_read_v1', 'x_text_post_v1']) {

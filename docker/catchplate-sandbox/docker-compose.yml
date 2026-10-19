@@ -131,6 +131,15 @@
           "source": "/home/catchplate/catchplate/scripts/check_development_sandbox.py",
           "target": "/app/scripts/check_development_sandbox.py",
           "type": "bind"
+        },
+        {
+          "bind": {
+            "create_host_path": false
+          },
+          "read_only": true,
+          "source": "/srv/catchplate-archive/homelab_data/catchplate-rename-finish.hU95xZ/ui/sandbox_web",
+          "target": "/app/catchplate/sandbox_web",
+          "type": "bind"
         }
       ],
       "working_dir": "/app"

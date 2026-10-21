@@ -34,3 +34,18 @@ ops/production-readiness.env
 ops/*.local.env
 ops/aws-kms-materials.spec.json
 *.log
+
+# Keep installation material and publication-audit output out of source control.
+*.private
+*.private.*
+*.key
+*.pem
+*.p12
+*.pfx
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+.publication-audit/
+deployment.local/
+!*.pem.example
+!*.key.example

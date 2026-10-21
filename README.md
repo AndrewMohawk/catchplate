@@ -1,5 +1,3 @@
-> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
-
 # Catchplate
 
 Let applications use your credentials without giving them your credentials.
@@ -10,11 +8,10 @@ own scoped Catchplate login. The proxy checks its permissions, supplies the
 provider credential and records the outcome. Supported permissions can also
 restrict response data or require human approval.
 
-The running console is [catchplate.example.com](https://catchplate.example.com/).
-The project, live console and proxy now use Catchplate. Returning clients need
-a fresh configuration and the new Catchplate CA; the old hostname, downloaded
-configuration and CA are not a compatibility route. See the
-[deployment and rename record](docs/catchplate-rename.md).
+Catchplate is self-hosted. Install your own instance or obtain access from its
+administrator. Addresses under `example.com` in these guides are placeholders,
+not a hosted service. Provider credentials and client configurations are private
+deployment inputs and do not belong in this repository.
 
 ## Start here
 
@@ -29,8 +26,8 @@ configuration and CA are not a compatibility route. See the
 - **Reference:** the [operator guide](docs/wiki/Home.md) covers providers,
   policies, client libraries, notifications and maintenance.
 
-The running instance is the product instance, not a separate demo. Opening it
-does not build the proxy, start a pilot or require a security-key ceremony.
+After installation, use the running console directly; ordinary use does not
+start a pilot or require a hardware-verification ceremony.
 The versioned guides above work without a published GitHub Wiki.
 
 The console's Overview separates **Give an app access** for administrators
@@ -115,10 +112,10 @@ Posting, publishing and other actions require explicit inputs and confirmation.
   [troubleshooting](docs/wiki/Troubleshooting.md): rotate client access,
   disconnect accounts and recover uncertain saves without accidental retries.
 
-The console and forward proxy have different addresses. The running proxy is
-`https://catchplate-proxy.example.com/`; use a fresh configuration downloaded
-from the console, not the console address, in your client. Download and verify
-the new `catchplate-ca.pem` alongside it. Do not rename an old CA file or disable
+The console and forward proxy have different addresses. Use the proxy address
+in a fresh configuration downloaded from your console, not the console address,
+in your client. Download and verify that instance's `catchplate-ca.pem`
+alongside it. Do not rename an old CA file or disable
 TLS verification to get past a trust error.
 
 ## Current scope and trust
@@ -138,31 +135,18 @@ Provider presets are setup templates, not preconnected accounts. Supported
 operations depend on the deployment's capabilities, approved destinations and
 your provider-side permissions. Synthetic acceptance and a healthy proxy do
 not establish access to your real account. See the
-[capability guide](docs/wiki/Capability-matrix-and-glossary.md) and
-[acceptance tracker](docs/project-completion.md) for verified boundaries and
-remaining real-provider work.
+[capability guide](docs/wiki/Capability-matrix-and-glossary.md) for supported
+operations and limits. Verify the intended request against your own account.
 
 ## Self-hosting and contributing
 
-The running instance is available now. A new
-[standalone installer](docker/catchplate-standalone/README.md) packages
+The [standalone installer](docker/catchplate-standalone/README.md) packages
 the app, proxy and authenticated TLS edge without homelab dependencies.
-**Pre-rename isolated installation and lifecycle verified:** both build paths and fresh
-starts passed, with separate browser, persisted-state restart and TLS replacement
-checks. The renamed image passed a fresh fixture-enabled install, retained-state
-startup and the migrated live sandbox's proxy/audit checks; this does not repeat
-every lifecycle check or establish real-provider acceptance. The main cutover
-has its own [deployment record](docs/project-completion.md#current-live-deployment). See the
-[rename evidence](docs/catchplate-rename.md), [verification record](docs/standalone-installation-verification.md)
-and [self-hosting/activation guide](docs/self-hosting.md).
-The [retained deployment](docker/catchplate-operator-demo/README.md)
-records the existing instance and is **not** a new-install command.
-Do not apply its state paths, identity or credentials to another installation.
-The older [development reference](docs/development-reference.md) covers a
-different engineering stack, not the current instance's onboarding path.
+Follow the [self-hosting and activation guide](docs/self-hosting.md) for lifecycle
+operations. Legacy operator-development recipes contain example paths and
+identities; they are not ready-to-run configuration for your deployment.
 
 For implementation details, see the [Rust proxy](data-plane/README.md),
 [credential constraints](docs/credential-constraints.md) and
-[current usability review](docs/usability-review.md). Historical architecture,
-pilot requirements and deployment observations are preserved in
-[project history](PROJECT_HISTORY.md); they are not the ordinary setup flow.
+[publication security guidance](docs/publication-security.md). Private deployment
+journals, screenshots and operational receipts are intentionally not distributed.

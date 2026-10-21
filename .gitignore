@@ -47,5 +47,7 @@ ops/aws-kms-materials.spec.json
 *.sqlite3-*
 .publication-audit/
 deployment.local/
+docker/catchplate-operator-demo/docker-compose.live.yml
+docker/catchplate-operator-demo/docker-compose.rename.yml
 !*.pem.example
 !*.key.example

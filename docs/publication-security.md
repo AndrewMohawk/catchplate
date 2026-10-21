@@ -24,6 +24,9 @@ History rewriting changes commit IDs and invalidates signatures and old source
 pins. Use fresh clones afterward; merging an old branch can reintroduce removed
 history. Independently rebuild and verify release artifacts from the new source
 identity rather than relabeling an old signed artifact.
+Before retiring old history, migrate any deployed client-source download pins to
+an accepted revision that will exist in the publication repository. A source
+template update alone does not migrate a running instance or saved client files.
 
 GitHub retains some cached commits and read-only pull-request refs that a force
 push cannot remove. Follow [GitHub's sensitive-data removal guidance](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository)

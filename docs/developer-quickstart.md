@@ -23,18 +23,18 @@ environment-variable examples:
 The running instance uses `https://catchplate.example.com/` for the console
 and `https://catchplate-proxy.example.com/` for the proxy. Its matching
 [Catchplate client examples are pinned to
-`f93fd9de`](https://github.com/AndrewMohawk/catchplate/tree/main/examples).
+`49798cd6`](https://github.com/AndrewMohawk/catchplate/tree/49798cd6579f7d5f0b75d32c2ac7b32d89078e56/examples).
 Use that release with the new handoff; a moving `main` link can change later.
 
 If you already have this repository locally, create a separate client checkout
 without switching your current worktree or changing the server:
 
 ```sh
-git worktree add --detach ../catchplate-clients f93fd9de8f178838f07a0bfd5693b621c36cf064
+git worktree add --detach ../catchplate-clients 49798cd6579f7d5f0b75d32c2ac7b32d89078e56
 cd ../catchplate-clients
 ```
 
-A shallow checkout may need `git fetch origin f93fd9de8f178838f07a0bfd5693b621c36cf064`
+A shallow checkout may need `git fetch origin 49798cd6579f7d5f0b75d32c2ac7b32d89078e56`
 first. Use the selected example's README in **that checkout**, including its
 Catchplate variable names, with the unmodified downloaded JSON and CA. Do not
 run server installation or migration commands from this client checkout.

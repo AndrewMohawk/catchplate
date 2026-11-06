@@ -1,6 +1,7 @@
 [Home](Home.md)
 
 - [Getting started](Getting-started.md)
+- [How Catchplate works](How-Catchplate-works.md)
 - [Credentials and providers](Credentials-and-providers.md)
 - [GitHub App setup](GitHub-App-setup.md)
 - [Google and X OAuth setup](OAuth-provider-setup.md)

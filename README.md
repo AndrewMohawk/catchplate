@@ -13,6 +13,52 @@ administrator. Addresses under `example.com` in these guides are placeholders,
 not a hosted service. Provider credentials and client configurations are private
 deployment inputs and do not belong in this repository.
 
+## How Catchplate works
+
+An administrator connects three things: a provider credential held by
+Catchplate, a client identity for one workload, and a permission describing the
+operations and limits that join them.
+
+```mermaid
+flowchart LR
+    Credential["Credential<br/>provider account or key"] --> Connection["Active connection"]
+    Client["Client<br/>app, agent, CI job"] --> Connection
+    Permission["Permission<br/>operation and limits"] --> Connection
+    Connection --> Handoff["Private client JSON<br/>and public proxy CA"]
+    Handoff --> Workload["Configured workload"]
+```
+
+The workload sends its normal API request through the proxy using its own
+Catchplate login. Catchplate authenticates the client, checks the permission,
+adds the provider credential only to an allowed request, validates the response,
+and records the outcome.
+
+```mermaid
+sequenceDiagram
+    actor Workload as App / agent / CI job
+    participant Proxy as Catchplate proxy
+    participant Policy as Policy and credential custody
+    participant Provider as Provider API
+    participant Audit as Audit log
+
+    Workload->>Proxy: HTTPS request + Catchplate login
+    Proxy->>Policy: Authenticate and match permission
+    alt Denied
+        Policy-->>Proxy: Bounded denial
+        Proxy-->>Workload: Block before provider dispatch
+    else Allowed
+        Policy-->>Proxy: Authorized credential placement
+        Proxy->>Provider: Approved request + provider credential
+        Provider-->>Proxy: Response
+        Proxy->>Policy: Validate response rules
+        Proxy-->>Workload: Permitted response or safe block
+    end
+    Proxy->>Audit: Record decision and outcome
+```
+
+For approval behavior, trust boundaries and a concrete scoped-write diagram,
+see [How Catchplate works](docs/wiki/How-Catchplate-works.md).
+
 ## Start here
 
 - **Administrator:** open your instance's console and follow

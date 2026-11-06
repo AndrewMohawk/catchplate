@@ -4,8 +4,8 @@
 
 Catchplate lets your scripts, services, agents and CI jobs use provider credentials without receiving those credentials. You save the provider account or key once, give each workload its own Catchplate login, and decide what that workload may do.
 
-This guide is maintained with the application source. Its versioned pages work
-in this repository and a local checkout; a separate GitHub Wiki is optional. See
+This guide is maintained with the application source and published to the
+GitHub Wiki. Its versioned pages also work in this repository and a local checkout. See
 [Wiki publication status](https://github.com/AndrewMohawk/catchplate/blob/main/docs/wiki-publishing.md)
 only if you maintain the documentation.
 
@@ -15,6 +15,9 @@ only if you maintain the documentation.
 [I already have the private JSON and CA](../developer-quickstart.md) ·
 [My request failed](Troubleshooting.md). A developer with a working handoff can
 skip credential creation and administrator setup entirely.
+
+New to the model? [See how Catchplate works](How-Catchplate-works.md) through
+the setup, request, approval and trust-boundary diagrams.
 
 ## The three things you manage
 
@@ -31,6 +34,7 @@ skip credential creation and administrator setup entirely.
 ### Set up or administer Catchplate
 
 - [Get your first client working](Getting-started.md): save a credential, grant access, download the client configuration and check the result.
+- [Understand the request path](How-Catchplate-works.md): see where credentials, client tokens, permissions, CA trust, approval and audit fit.
 - [Add or connect a provider](Credentials-and-providers.md): GitHub App/PAT, Google, npm, X, Alchemy, custom keys and AWS/ECR.
 - Follow a worked setup: [GitHub App](GitHub-App-setup.md), [Google/X OAuth](OAuth-provider-setup.md), or [custom Bearer/header API](Custom-API-credentials.md).
 - [Choose and restrict permissions](Permissions-and-policies.md): provider presets, exact API paths, optional filtering and publishing hours.

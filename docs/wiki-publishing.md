@@ -3,58 +3,22 @@
 # Publish the operator guide to GitHub Wiki
 
 The [versioned operator and developer guide](wiki/Home.md) is usable now in this
-repository or a local checkout. Its relative page links do not depend on the
-separate GitHub Wiki, which has not been published. Wiki availability must not
-block reading or using the guide.
+repository or a local checkout. It is also published to the separate
+[Catchplate Wiki](https://github.com/AndrewMohawk/catchplate/wiki). The versioned
+files remain authoritative and reviewable; updating them does not automatically
+update the Wiki.
 
-The [GitHub Wiki](https://github.com/AndrewMohawk/catchplate/wiki) remains an
-optional publication target for the reviewed `docs/wiki/` source. Publishing the
-application repository does **not** publish its Wiki:
+Publishing the application repository does **not** publish its Wiki:
 GitHub stores Wiki pages in a separate `catchplate.wiki.git` repository. Its
-default branch supplies the live pages; the initial page must be created on
-GitHub before cloning. See [GitHub's publishing instructions](https://docs.github.com/en/communities/documenting-your-project-with-wikis/adding-or-editing-wiki-pages#adding-or-editing-wiki-pages-locally).
+default branch supplies the live pages. See [GitHub's publishing instructions](https://docs.github.com/en/communities/documenting-your-project-with-wikis/adding-or-editing-wiki-pages#adding-or-editing-wiki-pages-locally).
 
-## Resolve the recorded publication blocker
+## Current publication state
 
-The checks below were made against the pre-rename Serverware Wiki. The repository
-is now Catchplate; its rename does not prove Wiki initialization or publication.
-Use the current remote above only after resolving access, and retain the old
-failures as historical observations. See [rename status](catchplate-rename.md).
-
-The [publication handoff](project-completion.md#current-checkpoint--october-13-access-continuation-and-operator-guide)
-records an enabled Wiki whose authenticated Git repository returned
-`Repository not found`. A fresh October 14 check confirmed `has_wiki: true`
-and administrator access to the private application repository, but the Wiki
-Git check using the existing GitHub CLI credential helper still returned
-`Repository not found` (exit 128). The earlier browser check had no authenticated
-GitHub session. Missing initialization and Wiki access remain undistinguished;
-the source guides have not been published to the Wiki. The October 15 late-day
-recheck again confirmed `private: true`, `has_wiki: true` and administrator
-access, while the authenticated Wiki Git lookup still returned the same error.
-The October 16 authenticated `ls-remote` recheck again returned `Repository not
-found` (exit 128); no access-state change or Wiki publication was established.
-
-An authorized repository maintainer must open the Wiki while signed into
-GitHub. If it offers **Create the first page**, keep the title **Home** and link
-to the [versioned guide](wiki/Home.md) until the reviewed pages are published
-below. Do not paste the unrendered source: its relative `.md` links target the
-application repository, not Wiki routes. This is a one-time
-initialization action; do not repeat it if a Home page already exists. If the
-Wiki already contains pages or Git access still fails after initialization,
-investigate existing access rather than creating a new PAT, requesting a
-secret in chat, or expanding CI permissions. Continue with publication only
-after the existing Wiki repository is accessible.
-
-Because this repository is private, also confirm that its owner's GitHub plan
-supports private-repository Wikis. GitHub documents this support for Pro, Team
-and Enterprise plans; Free supports Wikis on public repositories only. See
-[Wiki availability](https://docs.github.com/en/communities/documenting-your-project-with-wikis).
-An enabled Wiki setting and repository administrator access do not by themselves
-establish plan eligibility or initial-page creation. The current owner's plan
-was not returned by the authenticated account API, so plan eligibility is a
-check, not a diagnosed cause
-of `Repository not found`. Do not change repository visibility, purchase a plan
-or create a replacement public repository to bypass this check.
+The public Wiki was initialized and the reviewed pages were published on
+November 6, 2026. Clone and fast-forward the existing Wiki repository for
+updates. If Git access fails, investigate the existing repository or credentials;
+do not create a replacement repository, request a secret in chat, or force-push
+around concurrent work.
 
 ## Prepare an isolated publication checkout
 
@@ -89,17 +53,19 @@ publisher's checkout. Preserve the fresh directory for diagnosis.
 
 ## Render and review exactly the maintained pages
 
-These thirteen guides plus `_Sidebar.md` are the publication allowlist. Do not use
+These fourteen guides plus `_Sidebar.md` are the publication allowlist. Do not use
 `rsync --delete`, remove other Wiki pages, or copy the whole application checkout.
-Source navigation uses `Page.md#section`. The bounded renderer below changes
-only known sibling-page links to Wiki URLs in the isolated checkout, preserving
-fragments, external links and repository/evidence links. The source stays
-unchanged. It needs Node.js (built-in modules only), not an application build or
-package installation. Render all pages successfully before staging any changes.
+Source navigation uses `Page.md#section` for Wiki siblings and relative paths
+for versioned repository documents and examples. The bounded renderer below
+changes known sibling-page links to Wiki URLs and resolves repository-relative
+Markdown files to public `blob/main` URLs in the isolated checkout. It preserves
+fragments and external links. The source stays unchanged. It needs Node.js
+(built-in modules only), not an application build or package installation.
+Render all pages successfully before staging any changes.
 
 ```bash
 wiki_pages=(
-  Home.md Getting-started.md Credentials-and-providers.md Clients-and-recipes.md
+  Home.md How-Catchplate-works.md Getting-started.md Credentials-and-providers.md Clients-and-recipes.md
   GitHub-App-setup.md OAuth-provider-setup.md Custom-API-credentials.md
   Permissions-and-policies.md Proxy-and-CA.md Notifications-and-audit.md
   Operations-and-maintenance.md Troubleshooting.md Capability-matrix-and-glossary.md
@@ -110,7 +76,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const [source, checkout, ...pages] = process.argv.slice(2);
 const known = new Set(pages);
-if (pages.length !== 14 || known.size !== 14 ||
+if (pages.length !== 15 || known.size !== 15 ||
     pages.some(page => !/^[A-Za-z0-9_-]+\.md$/.test(page))) {
   throw new Error('Unexpected publication page allowlist');
 }
@@ -125,12 +91,26 @@ const rendered = pages.map(page => {
       (outputStat && !outputStat.isFile())) {
     throw new Error('Unsafe or oversized publication page: ' + page);
   }
-  const text = fs.readFileSync(input, 'utf8').replace(
+  const siblingLinks = fs.readFileSync(input, 'utf8').replace(
     /\]\(([A-Za-z0-9_-]+\.md)(#[^\s)]*)?\)/g,
     (_match, target, fragment = '') => {
       if (!known.has(target)) throw new Error('Unknown guide page: ' + target);
       return '](https://github.com/AndrewMohawk/catchplate/wiki/' +
         target.slice(0, -3) + fragment + ')';
+    }
+  );
+  const text = siblingLinks.replace(
+    /\]\(((?:\.\.\/)+(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.md)(#[^\s)]*)?\)/g,
+    (_match, target, fragment = '') => {
+      const repositoryPath = path.posix.normalize(path.posix.join('docs/wiki', target));
+      const repositoryFile = path.join(source, ...repositoryPath.split('/'));
+      const repositoryStat = fs.lstatSync(repositoryFile);
+      if ((!repositoryPath.startsWith('docs/') && !repositoryPath.startsWith('examples/')) ||
+          repositoryPath.includes('..') || !repositoryStat.isFile() || repositoryStat.isSymbolicLink()) {
+        throw new Error('Unsafe repository guide link: ' + target);
+      }
+      return '](https://github.com/AndrewMohawk/catchplate/blob/main/' +
+        repositoryPath + fragment + ')';
     }
   );
   return {output, text};
@@ -169,7 +149,7 @@ normal push also rejects a conflicting remote update occurring after the fetch.
 
 ## Verify publication, then record it
 
-Open the rendered GitHub Wiki Home page, sidebar and each of the twelve linked
+Open the rendered GitHub Wiki Home page, sidebar and each of the thirteen linked
 guides, including the three provider-setup walkthroughs. Confirm page titles,
 tables, code blocks, internal navigation, and links
 to repository examples and evidence anchors. A successful Git push alone is not
